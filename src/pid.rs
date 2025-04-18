@@ -47,14 +47,14 @@ pub struct PidConfig {
     alpha: f64,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PidActivity {
     Inactive,
     HoldIntegration,
     Active,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PidContext {
     i_term: f64,
     last_err: f64,
@@ -118,7 +118,7 @@ impl PidConfig {
         self.kp = kp;
         self.ki = ki * self.sample_time.as_secs_f64();
         self.kd = kd / self.sample_time.as_secs_f64();
-        return true;
+        true
     }
 
     pub fn set_sample_time(&mut self, sample_time: Duration) -> bool {
@@ -135,7 +135,7 @@ impl PidConfig {
         self.alpha = delta_t / (delta_t + self.filter_tc);
 
         self.sample_time = sample_time;
-        return true;
+        true
     }
 
     pub fn set_output_limits(&mut self, output_min: f64, output_max: f64) -> bool {
@@ -146,7 +146,7 @@ impl PidConfig {
         self.output_min = output_min;
         self.output_max = output_max;
 
-        return true;
+        true
     }
 
     pub fn set_filter_tc(&mut self, filter_tc: f64) -> bool {
@@ -158,7 +158,7 @@ impl PidConfig {
         self.alpha = delta_t / (delta_t + filter_tc);
 
         self.filter_tc = filter_tc;
-        return true;
+        true
     }
 }
 
@@ -198,70 +198,69 @@ impl Pid {
 
     pub fn compute(
         &self,
-        ctx: &PidContext,
+        mut ctx: PidContext,
         input: f64,
         setpoint: f64,
         timestamp: Instant,
         feedforward: Option<f64>,
-    ) -> (PidContext, f64) {
-        let mut state = ctx.clone();
-        if state.activity_level == PidActivity::Inactive {
-            return (state, state.last_output);
+    ) -> (f64, PidContext) {
+        if ctx.activity_level == PidActivity::Inactive {
+            return (ctx.last_output, ctx);
         }
 
-        let time_delta = timestamp.duration_since(state.last_time);
+        let time_delta = timestamp.duration_since(ctx.last_time);
 
         // Do not compute if the time delta is less than the sample time
         if time_delta < self.config.sample_time {
-            return (state, state.last_output);
+            return (ctx.last_output, ctx);
         }
 
         let error = setpoint - input;
 
         // If the PID controller is just switched active, initialize the state
-        if state.need_initialize {
-            state.last_time = timestamp;
-            state.last_input = input;
-            state.last_err = error;
-            state.i_term = state.last_output;
-            state.i_term = state
+        if ctx.need_initialize {
+            ctx.last_time = timestamp;
+            ctx.last_input = input;
+            ctx.last_err = error;
+            ctx.i_term = ctx.last_output;
+            ctx.i_term = ctx
                 .i_term
                 .clamp(self.config.output_min, self.config.output_max);
-            state.need_initialize = false;
+            ctx.need_initialize = false;
         }
 
         if !self.config.use_strict_causal_integrator {
-            state = self.update_integral(state, error);
+            ctx = self.update_integral(ctx, error);
         }
 
         // Optional derivative on measurement to mitigate derivative kick
         let raw_derivative = if self.config.use_derivative_on_measurement {
-            state.last_input - input // Note reversed order of operands
+            ctx.last_input - input // Note reversed order of operands
         } else {
-            error - state.last_err
+            error - ctx.last_err
         };
 
         // Pass the derivative through a first-order LPF
         let derivative =
-            self.config.alpha * raw_derivative + (1.0 - self.config.alpha) * state.last_derivative;
-        state.last_derivative = derivative;
+            self.config.alpha * raw_derivative + (1.0 - self.config.alpha) * ctx.last_derivative;
+        ctx.last_derivative = derivative;
 
         // Clamp output to prevent windup
         let output = self.config.kp * error
-            + state.i_term
+            + ctx.i_term
             + self.config.kd * derivative
             + feedforward.unwrap_or(0.0);
         let clamped_output = output.clamp(self.config.output_min, self.config.output_max);
 
         if self.config.use_strict_causal_integrator {
-            state = self.update_integral(state, error);
+            ctx = self.update_integral(ctx, error);
         }
 
-        state.last_input = input;
-        state.last_err = error;
-        state.last_time = timestamp;
-        state.last_output = clamped_output;
-        return (state, clamped_output);
+        ctx.last_input = input;
+        ctx.last_err = error;
+        ctx.last_time = timestamp;
+        ctx.last_output = clamped_output;
+        (clamped_output, ctx)
     }
 
     fn update_integral(&self, mut ctx: PidContext, error: f64) -> PidContext {
