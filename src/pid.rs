@@ -180,13 +180,29 @@ impl Default for PidConfig {
     }
 }
 
-pub struct Pid {
+/// A functional implementation of a PID (Proportional-Integral-Derivative) controller.
+///
+/// This struct represents a PID controller, which computes the control output based proportional,
+/// integral, and derivative terms based on the error between a setpoint and a process variable.
+/// This implementation is stateless so a context object must be passed in and returned with each
+/// call to `compute`.
+pub struct FuncPidController {
     config: PidConfig,
 }
 
-impl Pid {
+/// A stateful implementation of a PID (Proportional-Integral-Derivative) controller.
+///
+/// This struct represents a PID controller, which computes the control output based proportional,
+/// integral, and derivative terms based on the error between a setpoint and a process variable.
+/// This implementation maintains its own state, so it can be used without passing a context object.
+pub struct PidController {
+    ctx: PidContext,
+    controller: FuncPidController,
+}
+
+impl FuncPidController {
     pub fn new(config: PidConfig) -> Self {
-        Pid { config }
+        FuncPidController { config }
     }
 
     pub fn config(&self) -> &PidConfig {
@@ -276,5 +292,41 @@ impl Pid {
             .i_term
             .clamp(self.config.output_min, self.config.output_max);
         ctx
+    }
+}
+
+impl PidController {
+    pub fn new(config: PidConfig) -> Self {
+        let controller = FuncPidController::new(config);
+        Self {
+            ctx: PidContext::new(Instant::now()),
+            controller,
+        }
+    }
+
+    pub fn config(&self) -> &PidConfig {
+        &self.controller.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut PidConfig {
+        &mut self.controller.config
+    }
+
+    pub fn compute(
+        &mut self,
+        input: f64,
+        setpoint: f64,
+        timestamp: Instant,
+        feedforward: Option<f64>,
+    ) -> f64 {
+        let (output, ctx) =
+            self.controller
+                .compute(self.ctx, input, setpoint, timestamp, feedforward);
+        self.ctx = ctx;
+        output
+    }
+
+    pub fn set_activity_level(&mut self, activity_level: PidActivity) {
+        self.ctx.set_activity_level(activity_level);
     }
 }

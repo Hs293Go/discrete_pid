@@ -1,4 +1,4 @@
-use robust_pid::pid::{Pid, PidActivity, PidConfig, PidContext};
+use robust_pid::pid::{FuncPidController, PidActivity, PidConfig, PidContext};
 mod data;
 use std::time::{Duration, Instant};
 
@@ -30,10 +30,10 @@ fn is_close<T: Float>(a: T, b: T, tolerance: Tolerances<T>) -> bool {
     diff < tolerance.absolute.max(tolerance.relative * norm)
 }
 
-fn make_controller() -> (Pid, PidContext) {
+fn make_controller() -> (FuncPidController, PidContext) {
     let mut config = PidConfig::default();
     config.set_output_limits(-10.0, 10.0);
-    let controller = Pid::new(config);
+    let controller = FuncPidController::new(config);
     let mut ctx = PidContext::new(Instant::now());
     ctx.set_activity_level(PidActivity::Active);
     (controller, ctx)
