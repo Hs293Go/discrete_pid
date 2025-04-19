@@ -44,7 +44,9 @@ pub struct PidConfig {
     /// Defaults to true.
     use_derivative_on_measurement: bool,
 
-    alpha: f64,
+    /// Smoothing constant for the low-pass filter applied to the derivative term.
+    /// Not to be set directly, but calculated based on the filter time constant and sample time.
+    smoothing_constant: f64,
 }
 
 impl Default for PidConfig {
@@ -59,7 +61,7 @@ impl Default for PidConfig {
             output_max: f64::INFINITY,
             use_strict_causal_integrator: true,
             use_derivative_on_measurement: false,
-            alpha: 0.5,
+            smoothing_constant: 0.5,
         }
     }
 }
@@ -87,11 +89,6 @@ impl PidConfig {
     /// Returns the time constant for the low-pass filter applied to the derivative term.
     pub fn filter_tc(&self) -> f64 {
         self.filter_tc
-    }
-
-    /// Convenience method that returns the proportional, integral, and derivative gains together as a tuple.
-    pub fn gains(&self) -> (f64, f64, f64) {
-        (self.kp(), self.ki(), self.kd())
     }
 
     /// Returns the sampling time for the PID controller.
@@ -190,15 +187,10 @@ impl PidConfig {
         }
 
         let delta_t = self.sample_time.as_secs_f64();
-        self.alpha = delta_t / (delta_t + filter_tc);
+        self.smoothing_constant = delta_t / (delta_t + filter_tc);
 
         self.filter_tc = filter_tc;
         true
-    }
-
-    /// Convenience method to set the proportional, integral, and derivative gains together
-    pub fn set_gains(&mut self, kp: f64, ki: f64, kd: f64) -> bool {
-        self.set_kp(kp) && self.set_ki(ki) && self.set_kd(kd)
     }
 
     /// Sets the sample time for the PID controller. Rescales the integral and derivative gains and
@@ -209,9 +201,9 @@ impl PidConfig {
     ///
     /// # Returns
     /// - `true` if the sample time was set successfully.
-    /// - `false` if the sample time is less than or equal to zero.
+    /// - `false` if the sample time is zero or max
     pub fn set_sample_time(&mut self, sample_time: Duration) -> bool {
-        if sample_time.as_secs_f64() <= 0.0 {
+        if sample_time.is_zero() || sample_time == Duration::MAX {
             return false;
         }
 
@@ -221,7 +213,7 @@ impl PidConfig {
         self.kd /= ratio;
 
         let delta_t = sample_time.as_secs_f64();
-        self.alpha = delta_t / (delta_t + self.filter_tc);
+        self.smoothing_constant = delta_t / (delta_t + self.filter_tc);
 
         self.sample_time = sample_time;
         true
@@ -393,8 +385,8 @@ impl FuncPidController {
         };
 
         // Pass the derivative through a first-order LPF
-        let derivative =
-            self.config.alpha * raw_derivative + (1.0 - self.config.alpha) * ctx.last_derivative;
+        let derivative = self.config.smoothing_constant * raw_derivative
+            + (1.0 - self.config.smoothing_constant) * ctx.last_derivative;
         ctx.last_derivative = derivative;
 
         // Clamp output to prevent windup
