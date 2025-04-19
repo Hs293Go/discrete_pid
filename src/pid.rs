@@ -17,6 +17,10 @@ pub struct PidConfig {
     /// Defaults to 0.0.
     kd: f64,
 
+    /// Time constant for the low-pass filter applied to the derivative term.
+    /// Defaults to 0.01s.
+    filter_tc: f64,
+
     /// Sampling time for the PID controller.
     /// Defaults to 10ms.
     sample_time: Duration,
@@ -40,11 +44,221 @@ pub struct PidConfig {
     /// Defaults to true.
     use_derivative_on_measurement: bool,
 
-    /// Time constant for the low-pass filter applied to the derivative term.
-    /// Defaults to 0.01s.
-    filter_tc: f64,
-
     alpha: f64,
+}
+
+impl Default for PidConfig {
+    fn default() -> Self {
+        PidConfig {
+            kp: 1.0,
+            ki: 0.01,
+            kd: 0.0,
+            filter_tc: 0.01,
+            sample_time: Duration::from_millis(10),
+            output_min: -f64::INFINITY,
+            output_max: f64::INFINITY,
+            use_strict_causal_integrator: true,
+            use_derivative_on_measurement: true,
+            alpha: 0.5,
+        }
+    }
+}
+
+impl PidConfig {
+    /// Returns the proportional gain.
+    pub fn kp(&self) -> f64 {
+        self.kp
+    }
+
+    /// Returns the total integral gain.
+    /// This gain is the internal ki value, inversely scaled by the sample time to produce the value that the
+    /// user passes into set_ki
+    pub fn ki(&self) -> f64 {
+        self.ki / self.sample_time.as_secs_f64()
+    }
+
+    /// Returns the total derivative gain.
+    /// This gain is the internal kd value, scaled by the sample time to produce the value that the
+    /// user passes into set_kd
+    pub fn kd(&self) -> f64 {
+        self.kd * self.sample_time.as_secs_f64()
+    }
+
+    /// Returns the time constant for the low-pass filter applied to the derivative term.
+    pub fn filter_tc(&self) -> f64 {
+        self.filter_tc
+    }
+
+    /// Convenience method that returns the proportional, integral, and derivative gains together as a tuple.
+    pub fn gains(&self) -> (f64, f64, f64) {
+        (self.kp(), self.ki(), self.kd())
+    }
+
+    /// Returns the sampling time for the PID controller.
+    pub fn sample_time(&self) -> Duration {
+        self.sample_time
+    }
+
+    /// Returns the minimum output limit.
+    pub fn output_min(&self) -> f64 {
+        self.output_min
+    }
+
+    /// Returns the maximum output limit.
+    pub fn output_max(&self) -> f64 {
+        self.output_max
+    }
+
+    /// Returns the flag indicating whether to use a strict causal integrator.
+    pub fn use_strict_causal_integrator(&self) -> bool {
+        self.use_strict_causal_integrator
+    }
+
+    /// Returns the flag indicating whether to apply the derivative on the measurement.
+    pub fn use_derivative_on_measurement(&self) -> bool {
+        self.use_derivative_on_measurement
+    }
+
+    /// Sets the proportional gain.
+    ///
+    /// The proportional gain must be greater than zero. If the user intends to disable the PID
+    /// controller, they should set the activity level to `Inactive` instead.
+    ///
+    /// # Arguments
+    /// - `kp`: The new proportional gain.
+    ///
+    /// # Returns
+    /// - `true` if the gain was set successfully.
+    /// - `false` if the gain is less than or equal to zero or not finite.
+    pub fn set_kp(&mut self, kp: f64) -> bool {
+        if kp <= 0.0 || !kp.is_finite() {
+            return false;
+        }
+        self.kp = kp;
+        true
+    }
+
+    /// Sets the integral gain.
+    ///
+    /// The user passes in a 'total' integral gain, which is scaled by the sample time to produce
+    /// the actual ki value used in the PID algorithm.
+    ///
+    /// # Arguments
+    /// - `ki`: The new integral gain.
+    ///
+    /// # Returns
+    /// - `true` if the gain was set successfully.
+    /// - `false` if the gain is less than zero or not finite.
+    pub fn set_ki(&mut self, ki: f64) -> bool {
+        if ki < 0.0 || !ki.is_finite() {
+            return false;
+        }
+        self.ki = ki * self.sample_time.as_secs_f64();
+        true
+    }
+
+    /// Sets the derivative gain.
+    ///
+    /// The user passes in a 'total' derivative gain, which is scaled inversely by the sample time to produce
+    /// the actual kd value used in the PID algorithm.
+    ///
+    /// # Arguments
+    /// - `kd`: The new derivative gain.
+    ///
+    /// # Returns
+    /// - `true` if the gain was set successfully.
+    /// - `false` if the gain is less than zero or not finite.
+    pub fn set_kd(&mut self, kd: f64) -> bool {
+        if kd < 0.0 || !kd.is_finite() {
+            return false;
+        }
+        self.kd = kd / self.sample_time.as_secs_f64();
+        true
+    }
+
+    /// Sets the time constant for the low-pass filter applied to the derivative term.
+    ///
+    /// # Arguments
+    /// - `filter_tc`: The new time constant for the filter.
+    ///
+    /// # Returns
+    /// - `true` if the time constant was set successfully.
+    /// - `false` if the time constant is less than or equal to zero or non finite.
+    pub fn set_filter_tc(&mut self, filter_tc: f64) -> bool {
+        if filter_tc <= 0.0 || !filter_tc.is_finite() {
+            return false;
+        }
+
+        let delta_t = self.sample_time.as_secs_f64();
+        self.alpha = delta_t / (delta_t + filter_tc);
+
+        self.filter_tc = filter_tc;
+        true
+    }
+
+    /// Convenience method to set the proportional, integral, and derivative gains together
+    pub fn set_gains(&mut self, kp: f64, ki: f64, kd: f64) -> bool {
+        self.set_kp(kp) && self.set_ki(ki) && self.set_kd(kd)
+    }
+
+    /// Sets the sample time for the PID controller. Rescales the integral and derivative gains and
+    /// the filter for the derivative term to maintain consistent behavior.
+    ///
+    /// # Arguments
+    /// - `sample_time`: The new sample time.
+    ///
+    /// # Returns
+    /// - `true` if the sample time was set successfully.
+    /// - `false` if the sample time is less than or equal to zero.
+    pub fn set_sample_time(&mut self, sample_time: Duration) -> bool {
+        if sample_time.as_secs_f64() <= 0.0 {
+            return false;
+        }
+
+        let ratio = sample_time.as_secs_f64() / self.sample_time.as_secs_f64();
+
+        self.ki *= ratio;
+        self.kd /= ratio;
+
+        let delta_t = sample_time.as_secs_f64();
+        self.alpha = delta_t / (delta_t + self.filter_tc);
+
+        self.sample_time = sample_time;
+        true
+    }
+
+    /// Sets the minimum and maximum output limits for the PID controller.
+    ///
+    /// These limits may be set to infinity to disable clamping.
+    ///
+    /// # Arguments
+    /// - `output_min`: The minimum output limit.
+    /// - `output_max`: The maximum output limit.
+    ///
+    /// # Returns
+    /// - `true` if the limits were set successfully.
+    /// - `false` if the minimum limit is greater than or equal to the maximum limit, or either
+    ///   limit is not finite.
+    pub fn set_output_limits(&mut self, output_min: f64, output_max: f64) -> bool {
+        if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
+            return false;
+        }
+
+        self.output_min = output_min;
+        self.output_max = output_max;
+
+        true
+    }
+
+    /// Sets whether to use a strict causal integrator.
+    pub fn set_use_strict_causal_integrator(&mut self, use_strict_causal_integrator: bool) {
+        self.use_strict_causal_integrator = use_strict_causal_integrator;
+    }
+
+    /// Sets whether to apply the derivative on the measurement.
+    pub fn set_use_derivative_on_measurement(&mut self, use_derivative_on_measurement: bool) {
+        self.use_derivative_on_measurement = use_derivative_on_measurement;
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -96,85 +310,6 @@ impl PidContext {
         let activating = activity_level != PidActivity::Inactive;
         if activating && self.activity_level == PidActivity::Inactive {
             self.need_initialize = true;
-        }
-        self.activity_level = activity_level
-    }
-}
-
-impl PidConfig {
-    pub fn output_min(&self) -> f64 {
-        self.output_min
-    }
-
-    pub fn output_max(&self) -> f64 {
-        self.output_max
-    }
-
-    pub fn set_tunings(&mut self, kp: f64, ki: f64, kd: f64) -> bool {
-        if kp < 0.0 || ki < 0.0 || kd < 0.0 {
-            return false;
-        }
-
-        self.kp = kp;
-        self.ki = ki * self.sample_time.as_secs_f64();
-        self.kd = kd / self.sample_time.as_secs_f64();
-        true
-    }
-
-    pub fn set_sample_time(&mut self, sample_time: Duration) -> bool {
-        if sample_time.as_secs_f64() <= 0.0 {
-            return false;
-        }
-
-        let ratio = sample_time.as_secs_f64() / self.sample_time.as_secs_f64();
-
-        self.ki *= ratio;
-        self.kd /= ratio;
-
-        let delta_t = sample_time.as_secs_f64();
-        self.alpha = delta_t / (delta_t + self.filter_tc);
-
-        self.sample_time = sample_time;
-        true
-    }
-
-    pub fn set_output_limits(&mut self, output_min: f64, output_max: f64) -> bool {
-        if output_min >= output_max {
-            return false;
-        }
-
-        self.output_min = output_min;
-        self.output_max = output_max;
-
-        true
-    }
-
-    pub fn set_filter_tc(&mut self, filter_tc: f64) -> bool {
-        if filter_tc <= 0.0 {
-            return false;
-        }
-
-        let delta_t = self.sample_time.as_secs_f64();
-        self.alpha = delta_t / (delta_t + filter_tc);
-
-        self.filter_tc = filter_tc;
-        true
-    }
-}
-
-impl Default for PidConfig {
-    fn default() -> Self {
-        PidConfig {
-            kp: 1.0,
-            ki: 0.01,
-            kd: 0.0,
-            sample_time: Duration::from_millis(10),
-            output_min: -f64::INFINITY,
-            output_max: f64::INFINITY,
-            use_strict_causal_integrator: true,
-            use_derivative_on_measurement: true,
-            filter_tc: 0.01,
-            alpha: 0.5,
         }
         self.activity_level = activity_level
     }

@@ -40,6 +40,148 @@ fn make_controller() -> (FuncPidController, PidContext) {
 }
 
 #[test]
+fn test_get_and_set_kp() {
+    let (mut pid, _) = make_controller();
+    let config = pid.config_mut();
+
+    // Default kp is 1
+    assert_eq!(config.kp(), 1.0);
+
+    const NEW_KP: f64 = 10.0;
+    // Set a new kp
+    assert!(config.set_kp(NEW_KP));
+    assert_eq!(config.kp(), NEW_KP);
+
+    // Zero, negative and non-finite kp are invalid
+    const INVALID_VALUES: &[f64; 4] = &[0.0, -1.0, f64::INFINITY, f64::NAN];
+
+    for it in INVALID_VALUES {
+        // Setting negative kp should fail
+        assert!(!config.set_kp(*it));
+
+        // Failing to set kp should not change the value
+        assert_eq!(config.kp(), NEW_KP);
+    }
+}
+
+#[test]
+fn test_get_and_set_ki() {
+    let (mut pid, _) = make_controller();
+    let config = pid.config_mut();
+
+    // Default ki is 1
+    assert_eq!(config.ki(), 1.0);
+
+    const NEW_KI: f64 = 10.0;
+    // Set a new ki
+    assert!(config.set_ki(NEW_KI));
+    assert_eq!(config.ki(), NEW_KI);
+
+    // Changing sample time does not change total ki
+    config.set_sample_time(Duration::from_millis(150));
+    assert_eq!(config.ki(), NEW_KI);
+
+    // Negative and non-finite ki are invalid
+    const INVALID_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
+
+    for it in INVALID_VALUES {
+        assert!(!config.set_ki(*it));
+
+        // Failing to set ki should not change the value
+        assert_eq!(config.ki(), NEW_KI);
+    }
+
+    // Zero ki is valid
+    assert!(config.set_ki(0.0));
+    assert_eq!(config.ki(), 0.0);
+}
+
+#[test]
+fn test_get_and_set_kd() {
+    let (mut pid, _) = make_controller();
+    let config = pid.config_mut();
+
+    // Default kd is 0
+    assert_eq!(config.kd(), 0.0);
+
+    const NEW_KD: f64 = 10.0;
+    // Set a new kd
+    config.set_kd(NEW_KD);
+    assert_eq!(config.kd(), NEW_KD);
+
+    // Changing sample time does not change total kd
+    config.set_sample_time(Duration::from_millis(150));
+    assert_eq!(config.kd(), NEW_KD);
+
+    // Negative and non-finite kd are invalid
+    const INVALID_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
+
+    for it in INVALID_VALUES {
+        assert!(!config.set_kd(*it));
+
+        // Failing to set kd should not change the value
+        assert_eq!(config.kd(), NEW_KD);
+    }
+
+    // Zero kd is valid
+    assert!(config.set_kd(0.0));
+    assert_eq!(config.kd(), 0.0);
+}
+
+#[test]
+fn test_get_and_set_filter_tc() {
+    let (mut pid, _) = make_controller();
+    let config = pid.config_mut();
+
+    // Default filter time constant is 0
+    assert_eq!(config.filter_tc(), 0.01);
+
+    const NEW_TC: f64 = 10.0;
+    // Set a new filter time constant
+    assert!(config.set_filter_tc(NEW_TC));
+    assert_eq!(config.filter_tc(), NEW_TC);
+
+    // Negative and non-finite filter time constants are invalid
+    const INVALID_VALUES: &[f64; 4] = &[-1.0, 0.0, f64::NAN, f64::INFINITY];
+
+    for it in INVALID_VALUES {
+        assert!(!config.set_filter_tc(*it));
+
+        // Failing to set filter time constant should not change the value
+        assert_eq!(config.filter_tc(), NEW_TC);
+    }
+}
+
+#[test]
+fn test_get_and_set_sample_time() {
+    let (mut pid, _) = make_controller();
+    let config = pid.config_mut();
+
+    // Default sample time is 10ms
+    assert_eq!(config.sample_time(), Duration::from_millis(10));
+
+    const NEW_SAMPLE_TIME: Duration = Duration::from_millis(100);
+    let gains = (config.kp(), config.ki(), config.kd());
+    // Set a new sample time
+    assert!(config.set_sample_time(NEW_SAMPLE_TIME));
+    assert_eq!(config.sample_time(), NEW_SAMPLE_TIME);
+
+    // Changing sample time does not change any of kp/ki/kd
+    let gains_round_trip = (config.kp(), config.ki(), config.kd());
+    assert_eq!(gains, gains_round_trip);
+
+    // Negative and non-finite sample times are invalid
+    const INVALID_VALUES: &[Duration; 2] = &[Duration::from_millis(0), Duration::MAX];
+
+    for it in INVALID_VALUES {
+        assert!(!config.set_sample_time(*it));
+
+        // Failing to set sample time should not change the value
+        assert_eq!(config.sample_time(), NEW_SAMPLE_TIME);
+    }
+}
+
+#[test]
 fn test_output_within_limits() {
     let (pid, mut ctx) = make_controller();
     let now = Instant::now();
