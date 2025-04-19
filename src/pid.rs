@@ -176,6 +176,7 @@ impl Default for PidConfig {
             filter_tc: 0.01,
             alpha: 0.5,
         }
+        self.activity_level = activity_level
     }
 }
 
