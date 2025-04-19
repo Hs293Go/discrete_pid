@@ -58,7 +58,7 @@ impl Default for PidConfig {
             output_min: -f64::INFINITY,
             output_max: f64::INFINITY,
             use_strict_causal_integrator: true,
-            use_derivative_on_measurement: true,
+            use_derivative_on_measurement: false,
             alpha: 0.5,
         }
     }
