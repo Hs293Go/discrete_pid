@@ -254,7 +254,7 @@ impl PidConfig {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum PidActivity {
+pub enum IntegratorActivity {
     Inactive,
     HoldIntegration,
     Active,
@@ -262,14 +262,43 @@ pub enum PidActivity {
 
 #[derive(Copy, Clone, Debug)]
 pub struct PidContext {
+    /// The integral term of the PID controller. This accumulates the error multiplied by the I
+    /// gain to avoid integral jump.
+    /// Users should not access this directly
     i_term: f64,
+
+    /// The last error value. This is available for the user to query, and is also used to compute
+    /// the derivative term when derivative on measurement is off
     last_err: f64,
+
+    /// The last input value. This is used to compute the derivative term when derivative on
+    /// measurement is on
     last_input: f64,
+
+    /// The last output value. This is available for the user to query, and is also used to hold
+    /// the last output unchanged when the PID controller is inactive
     last_output: f64,
+
+    /// The last derivative value. This is used by the low-pass filter to smooth the derivative
+    /// Users should not access this directly
     last_derivative: f64,
+
+    /// The last time the PID controller was computed. This is compared to the current time to
+    /// determine if `sample_time` has elapsed since the last computation and the controller should
+    /// compute a new output
     last_time: Instant,
-    activity_level: PidActivity,
-    need_initialize: bool,
+
+    /// The activity level of the PID controller. This determines if the integrator is active,
+    /// holding the last value unchanged, or inactive and zeroed.
+    integrator_activity: IntegratorActivity,
+
+    /// A flag indicating whether the PID controller is active. If false, the output will not be
+    /// updated and the last output will be held unchanged.
+    is_active: bool,
+
+    /// A flag indicating whether the PID controller has been initialized. This is used to
+    /// reinitialize the controller when upon being activated
+    is_initialized: bool,
 }
 
 impl PidContext {
@@ -281,29 +310,72 @@ impl PidContext {
             last_output: 0.0,
             last_derivative: 0.0,
             last_time: timestamp,
-            activity_level: PidActivity::Active,
-            need_initialize: true,
+            is_active: true,
+            integrator_activity: IntegratorActivity::Active,
+            is_initialized: false,
         }
     }
 
+    /// Returns the output (last computed value) of the PID controller.
     pub fn output(&self) -> f64 {
         self.last_output
     }
 
+    /// Returns the error (difference between setpoint and input) of the PID controller.
     pub fn error(&self) -> f64 {
         self.last_err
     }
 
+    /// Returns the last time the PID controller was computed.
     pub fn last_time(&self) -> Instant {
         self.last_time
     }
 
-    pub fn set_activity_level(&mut self, activity_level: PidActivity) {
-        let activating = activity_level != PidActivity::Inactive;
-        if activating && self.activity_level == PidActivity::Inactive {
-            self.need_initialize = true;
+    /// Queries whether the PID controller is active.
+    pub fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    /// Queries the integrator activity level of the PID controller.
+    pub fn integrator_activity(&self) -> IntegratorActivity {
+        self.integrator_activity
+    }
+
+    /// Queries whether the PID controller has been initialized.
+    pub fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+
+    /// Activates the PID controller. If the controller was previously inactive, it will be
+    /// reinitialized.
+    pub fn activate(&mut self) {
+        if !self.is_active {
+            self.is_initialized = false;
         }
-        self.activity_level = activity_level
+        self.is_active = true;
+    }
+
+    /// Deactivates the PID controller. The output will not be updated and the last output will be
+    /// held unchanged.
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
+
+    /// Resets the integral term of the PID controller to zero.
+    pub fn reset_integral(&mut self) {
+        self.i_term = 0.0;
+    }
+
+    /// Sets the integrator activity level of the PID controller.
+    /// If the activity level is set to `Inactive` from any other state, the integral term will be
+    /// reset to zero.
+    pub fn set_integrator_activity(&mut self, activity: IntegratorActivity) {
+        self.integrator_activity = activity;
+
+        let is_active = self.integrator_activity != IntegratorActivity::Inactive;
+        if is_active && activity == IntegratorActivity::Inactive {
+            self.reset_integral();
+        }
     }
 }
 
@@ -348,7 +420,7 @@ impl FuncPidController {
         timestamp: Instant,
         feedforward: Option<f64>,
     ) -> (f64, PidContext) {
-        if ctx.activity_level == PidActivity::Inactive {
+        if !ctx.is_active {
             return (ctx.last_output, ctx);
         }
 
@@ -362,7 +434,7 @@ impl FuncPidController {
         let error = setpoint - input;
 
         // If the PID controller is just switched active, initialize the state
-        if ctx.need_initialize {
+        if !ctx.is_initialized {
             ctx.last_time = timestamp;
             ctx.last_input = input;
             ctx.last_err = error;
@@ -370,7 +442,7 @@ impl FuncPidController {
             ctx.i_term = ctx
                 .i_term
                 .clamp(self.config.output_min, self.config.output_max);
-            ctx.need_initialize = false;
+            ctx.is_initialized = true;
         }
 
         if !self.config.use_strict_causal_integrator {
@@ -408,16 +480,20 @@ impl FuncPidController {
     }
 
     fn update_integral(&self, mut ctx: PidContext, error: f64) -> PidContext {
-        if ctx.activity_level == PidActivity::HoldIntegration {
-            return ctx;
+        match ctx.integrator_activity {
+            IntegratorActivity::Inactive => {
+                ctx.i_term = 0.0;
+            }
+            IntegratorActivity::HoldIntegration => {
+                return ctx;
+            }
+            IntegratorActivity::Active => {
+                ctx.i_term += self.config.ki * error;
+                ctx.i_term = ctx
+                    .i_term
+                    .clamp(self.config.output_min, self.config.output_max);
+            }
         }
-        // Fold gain into i-term calculation for bumpless parameter change
-        ctx.i_term += self.config.ki * error;
-
-        // Clamp i-term to prevent windup
-        ctx.i_term = ctx
-            .i_term
-            .clamp(self.config.output_min, self.config.output_max);
         ctx
     }
 }
@@ -453,7 +529,11 @@ impl PidController {
         output
     }
 
-    pub fn set_activity_level(&mut self, activity_level: PidActivity) {
-        self.ctx.set_activity_level(activity_level);
+    pub fn activate(&mut self) {
+        self.ctx.activate();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.ctx.deactivate();
     }
 }
