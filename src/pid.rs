@@ -1,7 +1,28 @@
-// working variables
+// The PID Controller
+// Copyright © 2025 Hs293Go
+//
+// Permission is hereby granted, free of charge, to any person obtaining
+// a copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+// OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+// OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+use crate::time::InstantLike;
 
 use core::f64;
-use std::time::{Duration, Instant};
+use core::time::Duration;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PidConfig {
@@ -261,7 +282,7 @@ pub enum IntegratorActivity {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PidContext {
+pub struct PidContext<T: InstantLike> {
     /// The integral term of the PID controller. This accumulates the error multiplied by the I
     /// gain to avoid integral jump.
     /// Users should not access this directly
@@ -285,8 +306,8 @@ pub struct PidContext {
 
     /// The last time the PID controller was computed. This is compared to the current time to
     /// determine if `sample_time` has elapsed since the last computation and the controller should
-    /// compute a new output
-    last_time: Instant,
+    /// compute a new output. When the PID has never been run before, this is set to None.
+    last_time: Option<T>,
 
     /// The activity level of the PID controller. This determines if the integrator is active,
     /// holding the last value unchanged, or inactive and zeroed.
@@ -301,18 +322,36 @@ pub struct PidContext {
     is_initialized: bool,
 }
 
-impl PidContext {
-    pub fn new(timestamp: Instant) -> Self {
+impl<T: InstantLike> PidContext<T> {
+    /// Creates a new uninitialized PID context. This context is automatically initialized when the
+    /// PID controller computes its first output.
+    pub fn new_uninitialized() -> Self {
+        Default::default()
+    }
+
+    /// Creates a new PID context with the given timestamp, input, and output values. This
+    /// initialization ensures smooth continuity of the PID controller's output under the following
+    /// assumptions:
+    ///
+    /// * The input (process value) is at a steady state (or minimally changing)
+    /// * There is no error at the time of initialization, such that the output is purely
+    ///   contributed by the integral term
+    ///
+    /// # Arguments
+    /// - `timestamp`: The timestamp of the initialization.
+    /// - `input`: The input (process value) at the time of initialization.
+    /// - `output`: The output of the PID controller at the time of initialization.
+    pub fn new_initialize(timestamp: T, input: f64, output: f64) -> Self {
         Self {
-            i_term: 0.0,
+            i_term: output,
             last_err: 0.0,
-            last_input: 0.0,
-            last_output: 0.0,
+            last_input: input,
+            last_output: output,
             last_derivative: 0.0,
-            last_time: timestamp,
+            last_time: Some(timestamp),
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
-            is_initialized: false,
+            is_initialized: true,
         }
     }
 
@@ -327,7 +366,7 @@ impl PidContext {
     }
 
     /// Returns the last time the PID controller was computed.
-    pub fn last_time(&self) -> Instant {
+    pub fn last_time(&self) -> Option<T> {
         self.last_time
     }
 
@@ -379,6 +418,22 @@ impl PidContext {
     }
 }
 
+impl<T: InstantLike> Default for PidContext<T> {
+    fn default() -> Self {
+        Self {
+            i_term: 0.0,
+            last_err: 0.0,
+            last_input: 0.0,
+            last_output: 0.0,
+            last_derivative: 0.0,
+            last_time: None,
+            is_active: true,
+            integrator_activity: IntegratorActivity::Active,
+            is_initialized: false,
+        }
+    }
+}
+
 /// A functional implementation of a PID (Proportional-Integral-Derivative) controller.
 ///
 /// This struct represents a PID controller, which computes the control output based proportional,
@@ -394,8 +449,8 @@ pub struct FuncPidController {
 /// This struct represents a PID controller, which computes the control output based proportional,
 /// integral, and derivative terms based on the error between a setpoint and a process variable.
 /// This implementation maintains its own state, so it can be used without passing a context object.
-pub struct PidController {
-    ctx: PidContext,
+pub struct PidController<T: InstantLike> {
+    ctx: PidContext<T>,
     controller: FuncPidController,
 }
 
@@ -412,30 +467,25 @@ impl FuncPidController {
         &mut self.config
     }
 
-    pub fn compute(
+    pub fn compute<T: InstantLike>(
         &self,
-        mut ctx: PidContext,
+        mut ctx: PidContext<T>,
         input: f64,
         setpoint: f64,
-        timestamp: Instant,
+        timestamp: T,
         feedforward: Option<f64>,
-    ) -> (f64, PidContext) {
+    ) -> (f64, PidContext<T>) {
         if !ctx.is_active {
-            return (ctx.last_output, ctx);
-        }
-
-        let time_delta = timestamp.duration_since(ctx.last_time);
-
-        // Do not compute if the time delta is less than the sample time
-        if time_delta < self.config.sample_time {
             return (ctx.last_output, ctx);
         }
 
         let error = setpoint - input;
 
-        // If the PID controller is just switched active, initialize the state
-        if !ctx.is_initialized {
-            ctx.last_time = timestamp;
+        // If the PID controller is just switched active or has never been run before (last_time is
+        // None), initialize the state then run the controller without checking if the sample time
+        // has elapsed
+        if !ctx.is_initialized || ctx.last_time.is_none() {
+            ctx.last_time = Some(timestamp);
             ctx.last_input = input;
             ctx.last_err = error;
             ctx.i_term = ctx.last_output;
@@ -443,6 +493,13 @@ impl FuncPidController {
                 .i_term
                 .clamp(self.config.output_min, self.config.output_max);
             ctx.is_initialized = true;
+        } else {
+            // If there is no need to initialize and the controller has been called before, check if the
+            // time delta is less than the sample time
+            let time_delta = timestamp.duration_since(ctx.last_time.unwrap());
+            if time_delta < self.config.sample_time {
+                return (ctx.last_output, ctx);
+            }
         }
 
         if !self.config.use_strict_causal_integrator {
@@ -474,12 +531,12 @@ impl FuncPidController {
 
         ctx.last_input = input;
         ctx.last_err = error;
-        ctx.last_time = timestamp;
+        ctx.last_time = Some(timestamp);
         ctx.last_output = clamped_output;
         (clamped_output, ctx)
     }
 
-    fn update_integral(&self, mut ctx: PidContext, error: f64) -> PidContext {
+    fn update_integral<T: InstantLike>(&self, mut ctx: PidContext<T>, error: f64) -> PidContext<T> {
         match ctx.integrator_activity {
             IntegratorActivity::Inactive => {
                 ctx.i_term = 0.0;
@@ -498,11 +555,11 @@ impl FuncPidController {
     }
 }
 
-impl PidController {
+impl<T: InstantLike> PidController<T> {
     pub fn new(config: PidConfig) -> Self {
         let controller = FuncPidController::new(config);
         Self {
-            ctx: PidContext::new(Instant::now()),
+            ctx: PidContext::<T>::new_uninitialized(),
             controller,
         }
     }
@@ -519,7 +576,7 @@ impl PidController {
         &mut self,
         input: f64,
         setpoint: f64,
-        timestamp: Instant,
+        timestamp: T,
         feedforward: Option<f64>,
     ) -> f64 {
         let (output, ctx) =

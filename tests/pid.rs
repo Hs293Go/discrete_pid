@@ -1,21 +1,42 @@
+// Copyright © 2025 Hs293Go
+//
+// Permission is hereby granted, free of charge, to any person obtaining
+// a copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+// OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+// OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 mod data;
 
 use robust_pid::pid::{FuncPidController, IntegratorActivity, PidConfig, PidContext};
-use std::time::{Duration, Instant};
+use robust_pid::time::{InstantLike, Millis};
+use std::time::Duration;
 
 mod test_pid {
-    use super::*;
-    use std::time::Instant;
 
-    pub fn make_controller() -> (FuncPidController, PidContext) {
+    use super::*;
+
+    pub fn make_controller() -> (FuncPidController, PidContext<Millis>) {
         let config = PidConfig::default();
         let controller = FuncPidController::new(config);
-        let ctx = PidContext::new(Instant::now());
+        let ctx = PidContext::new_uninitialized();
         (controller, ctx)
     }
 
-    pub fn get_next_timestamp(pid: &FuncPidController, ctx: &PidContext) -> Instant {
-        let now = ctx.last_time();
+    pub fn get_next_timestamp(pid: &FuncPidController, ctx: &PidContext<Millis>) -> Millis {
+        let now = ctx.last_time().unwrap_or(Millis(0));
         now + pid.config().sample_time()
     }
 }
@@ -400,7 +421,7 @@ mod test_pid_numerical_performance {
     use super::*;
     use approx::assert_relative_eq;
 
-    fn sine_signal(time: Instant, initial_time: Instant) -> f64 {
+    fn sine_signal(time: Millis, initial_time: Millis) -> f64 {
         time.duration_since(initial_time).as_secs_f64().sin()
     }
     /// To recreate these test results, create the following simulink model
@@ -423,11 +444,12 @@ mod test_pid_numerical_performance {
         assert!(pid.config_mut().set_filter_tc(0.02));
 
         let mut output: f64;
-        let initial_time = ctx.last_time();
-        for i in 0..1000usize {
-            let timestamp = ctx.last_time() + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
 
-            let sine_signal = sine_signal(ctx.last_time(), initial_time);
+        for i in 0..1000usize {
+            let last_time = ctx.last_time().unwrap_or(Millis(0));
+            let timestamp = last_time + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
+
+            let sine_signal = sine_signal(last_time, Millis(0));
             (output, ctx) = pid.compute(ctx, 0.0, sine_signal, timestamp, None);
             if i % 20 == 0 {
                 assert_relative_eq!(
@@ -447,8 +469,10 @@ mod test_pid_numerical_performance {
 
         let mut state: f64 = 0.0;
         let mut output: f64;
+
         for i in 0..1000usize {
-            let timestamp = ctx.last_time() + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
+            let timestamp = ctx.last_time().unwrap_or(Millis(0))
+                + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
             (output, ctx) = pid.compute(ctx, state, 1.0, timestamp, None);
             if i % 20 == 0 {
                 assert_relative_eq!(
