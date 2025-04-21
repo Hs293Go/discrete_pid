@@ -21,26 +21,26 @@
 
 use crate::time::InstantLike;
 
-use core::f64;
 use core::time::Duration;
+use num_traits::float::FloatCore;
 
 #[derive(Copy, Clone, Debug)]
-pub struct PidConfig {
+pub struct PidConfig<F: FloatCore> {
     /// Proportional gain coefficient.
     /// Defaults to 1.0.
-    kp: f64,
+    kp: F,
 
     /// Integral gain coefficient.
-    /// Defaults to 0.01. When combined with the default sample time of 10ms, this gives I * Ts = 1
-    ki: f64,
+    /// Defaults to F::zero(). When combined with the default sample time of 10ms, this gives I * Ts = 1
+    ki: F,
 
     /// Derivative gain coefficient.
-    /// Defaults to 0.0.
-    kd: f64,
+    /// Defaults to F::zero().
+    kd: F,
 
     /// Time constant for the low-pass filter applied to the derivative term.
-    /// Defaults to 0.01s.
-    filter_tc: f64,
+    /// Defaults to F::zero().
+    filter_tc: F,
 
     /// Sampling time for the PID controller.
     /// Defaults to 10ms.
@@ -48,11 +48,11 @@ pub struct PidConfig {
 
     /// Minimum output value of the PID controller.
     /// Defaults to negative infinity, i.e. no limit.
-    output_min: f64,
+    output_min: F,
 
     /// Maximum output value of the PID controller.
     /// Defaults to positive infinity, i.e. no limit.
-    output_max: f64,
+    output_max: F,
 
     /// Whether to use a strict causal integrator.
     /// If true, the integral term is updated after the output is computed
@@ -67,48 +67,48 @@ pub struct PidConfig {
 
     /// Smoothing constant for the low-pass filter applied to the derivative term.
     /// Not to be set directly, but calculated based on the filter time constant and sample time.
-    smoothing_constant: f64,
+    smoothing_constant: F,
 }
 
-impl Default for PidConfig {
+impl<F: FloatCore> Default for PidConfig<F> {
     fn default() -> Self {
         PidConfig {
-            kp: 1.0,
-            ki: 0.01,
-            kd: 0.0,
-            filter_tc: 0.01,
+            kp: F::one(),
+            ki: F::from(0.01).unwrap(),
+            kd: F::zero(),
+            filter_tc: F::from(0.01).unwrap(),
             sample_time: Duration::from_millis(10),
-            output_min: -f64::INFINITY,
-            output_max: f64::INFINITY,
+            output_min: -F::infinity(),
+            output_max: F::infinity(),
             use_strict_causal_integrator: true,
             use_derivative_on_measurement: false,
-            smoothing_constant: 0.5,
+            smoothing_constant: F::from(0.5).unwrap(),
         }
     }
 }
 
-impl PidConfig {
+impl<F: FloatCore> PidConfig<F> {
     /// Returns the proportional gain.
-    pub fn kp(&self) -> f64 {
+    pub fn kp(&self) -> F {
         self.kp
     }
 
     /// Returns the total integral gain.
     /// This gain is the internal ki value, inversely scaled by the sample time to produce the value that the
     /// user passes into set_ki
-    pub fn ki(&self) -> f64 {
-        self.ki / self.sample_time.as_secs_f64()
+    pub fn ki(&self) -> F {
+        self.ki / F::from(self.sample_time.as_secs_f64()).unwrap()
     }
 
     /// Returns the total derivative gain.
     /// This gain is the internal kd value, scaled by the sample time to produce the value that the
     /// user passes into set_kd
-    pub fn kd(&self) -> f64 {
-        self.kd * self.sample_time.as_secs_f64()
+    pub fn kd(&self) -> F {
+        self.kd * F::from(self.sample_time.as_secs_f64()).unwrap()
     }
 
     /// Returns the time constant for the low-pass filter applied to the derivative term.
-    pub fn filter_tc(&self) -> f64 {
+    pub fn filter_tc(&self) -> F {
         self.filter_tc
     }
 
@@ -118,12 +118,12 @@ impl PidConfig {
     }
 
     /// Returns the minimum output limit.
-    pub fn output_min(&self) -> f64 {
+    pub fn output_min(&self) -> F {
         self.output_min
     }
 
     /// Returns the maximum output limit.
-    pub fn output_max(&self) -> f64 {
+    pub fn output_max(&self) -> F {
         self.output_max
     }
 
@@ -148,8 +148,8 @@ impl PidConfig {
     /// # Returns
     /// - `true` if the gain was set successfully.
     /// - `false` if the gain is less than or equal to zero or not finite.
-    pub fn set_kp(&mut self, kp: f64) -> bool {
-        if kp <= 0.0 || !kp.is_finite() {
+    pub fn set_kp(&mut self, kp: F) -> bool {
+        if kp <= F::zero() || !kp.is_finite() {
             return false;
         }
         self.kp = kp;
@@ -167,11 +167,11 @@ impl PidConfig {
     /// # Returns
     /// - `true` if the gain was set successfully.
     /// - `false` if the gain is less than zero or not finite.
-    pub fn set_ki(&mut self, ki: f64) -> bool {
-        if ki < 0.0 || !ki.is_finite() {
+    pub fn set_ki(&mut self, ki: F) -> bool {
+        if ki < F::zero() || !ki.is_finite() {
             return false;
         }
-        self.ki = ki * self.sample_time.as_secs_f64();
+        self.ki = ki * F::from(self.sample_time.as_secs_f64()).unwrap();
         true
     }
 
@@ -186,11 +186,11 @@ impl PidConfig {
     /// # Returns
     /// - `true` if the gain was set successfully.
     /// - `false` if the gain is less than zero or not finite.
-    pub fn set_kd(&mut self, kd: f64) -> bool {
-        if kd < 0.0 || !kd.is_finite() {
+    pub fn set_kd(&mut self, kd: F) -> bool {
+        if kd < F::zero() || !kd.is_finite() {
             return false;
         }
-        self.kd = kd / self.sample_time.as_secs_f64();
+        self.kd = kd / F::from(self.sample_time.as_secs_f64()).unwrap();
         true
     }
 
@@ -202,12 +202,12 @@ impl PidConfig {
     /// # Returns
     /// - `true` if the time constant was set successfully.
     /// - `false` if the time constant is less than or equal to zero or non finite.
-    pub fn set_filter_tc(&mut self, filter_tc: f64) -> bool {
-        if filter_tc <= 0.0 || !filter_tc.is_finite() {
+    pub fn set_filter_tc(&mut self, filter_tc: F) -> bool {
+        if filter_tc <= F::zero() || !filter_tc.is_finite() {
             return false;
         }
 
-        let delta_t = self.sample_time.as_secs_f64();
+        let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
         self.smoothing_constant = delta_t / (delta_t + filter_tc);
 
         self.filter_tc = filter_tc;
@@ -228,12 +228,12 @@ impl PidConfig {
             return false;
         }
 
-        let ratio = sample_time.as_secs_f64() / self.sample_time.as_secs_f64();
+        let ratio = F::from(sample_time.as_secs_f64() / self.sample_time.as_secs_f64()).unwrap();
 
-        self.ki *= ratio;
-        self.kd /= ratio;
+        self.ki = self.ki * ratio;
+        self.kd = self.kd / ratio;
 
-        let delta_t = sample_time.as_secs_f64();
+        let delta_t = F::from(sample_time.as_secs_f64()).unwrap();
         self.smoothing_constant = delta_t / (delta_t + self.filter_tc);
 
         self.sample_time = sample_time;
@@ -252,7 +252,7 @@ impl PidConfig {
     /// - `true` if the limits were set successfully.
     /// - `false` if the minimum limit is greater than or equal to the maximum limit, or either
     ///   limit is not finite.
-    pub fn set_output_limits(&mut self, output_min: f64, output_max: f64) -> bool {
+    pub fn set_output_limits(&mut self, output_min: F, output_max: F) -> bool {
         if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
             return false;
         }
@@ -282,27 +282,27 @@ pub enum IntegratorActivity {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PidContext<T: InstantLike> {
+pub struct PidContext<T: InstantLike, F: FloatCore> {
     /// The integral term of the PID controller. This accumulates the error multiplied by the I
     /// gain to avoid integral jump.
     /// Users should not access this directly
-    i_term: f64,
+    i_term: F,
 
     /// The last error value. This is available for the user to query, and is also used to compute
     /// the derivative term when derivative on measurement is off
-    last_err: f64,
+    last_err: F,
 
     /// The last input value. This is used to compute the derivative term when derivative on
     /// measurement is on
-    last_input: f64,
+    last_input: F,
 
     /// The last output value. This is available for the user to query, and is also used to hold
     /// the last output unchanged when the PID controller is inactive
-    last_output: f64,
+    last_output: F,
 
     /// The last derivative value. This is used by the low-pass filter to smooth the derivative
     /// Users should not access this directly
-    last_derivative: f64,
+    last_derivative: F,
 
     /// The last time the PID controller was computed. This is compared to the current time to
     /// determine if `sample_time` has elapsed since the last computation and the controller should
@@ -322,7 +322,7 @@ pub struct PidContext<T: InstantLike> {
     is_initialized: bool,
 }
 
-impl<T: InstantLike> PidContext<T> {
+impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
     /// Creates a new uninitialized PID context. This context is automatically initialized when the
     /// PID controller computes its first output.
     pub fn new_uninitialized() -> Self {
@@ -341,13 +341,13 @@ impl<T: InstantLike> PidContext<T> {
     /// - `timestamp`: The timestamp of the initialization.
     /// - `input`: The input (process value) at the time of initialization.
     /// - `output`: The output of the PID controller at the time of initialization.
-    pub fn new_initialize(timestamp: T, input: f64, output: f64) -> Self {
+    pub fn new_initialize(timestamp: T, input: F, output: F) -> Self {
         Self {
             i_term: output,
-            last_err: 0.0,
+            last_err: F::zero(),
             last_input: input,
             last_output: output,
-            last_derivative: 0.0,
+            last_derivative: F::zero(),
             last_time: Some(timestamp),
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
@@ -356,12 +356,12 @@ impl<T: InstantLike> PidContext<T> {
     }
 
     /// Returns the output (last computed value) of the PID controller.
-    pub fn output(&self) -> f64 {
+    pub fn output(&self) -> F {
         self.last_output
     }
 
     /// Returns the error (difference between setpoint and input) of the PID controller.
-    pub fn error(&self) -> f64 {
+    pub fn error(&self) -> F {
         self.last_err
     }
 
@@ -402,7 +402,7 @@ impl<T: InstantLike> PidContext<T> {
 
     /// Resets the integral term of the PID controller to zero.
     pub fn reset_integral(&mut self) {
-        self.i_term = 0.0;
+        self.i_term = F::zero();
     }
 
     /// Sets the integrator activity level of the PID controller.
@@ -418,14 +418,14 @@ impl<T: InstantLike> PidContext<T> {
     }
 }
 
-impl<T: InstantLike> Default for PidContext<T> {
+impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
     fn default() -> Self {
         Self {
-            i_term: 0.0,
-            last_err: 0.0,
-            last_input: 0.0,
-            last_output: 0.0,
-            last_derivative: 0.0,
+            i_term: F::zero(),
+            last_err: F::zero(),
+            last_input: F::zero(),
+            last_output: F::zero(),
+            last_derivative: F::zero(),
             last_time: None,
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
@@ -440,8 +440,8 @@ impl<T: InstantLike> Default for PidContext<T> {
 /// integral, and derivative terms based on the error between a setpoint and a process variable.
 /// This implementation is stateless so a context object must be passed in and returned with each
 /// call to `compute`.
-pub struct FuncPidController {
-    config: PidConfig,
+pub struct FuncPidController<F: FloatCore> {
+    config: PidConfig<F>,
 }
 
 /// A stateful implementation of a PID (Proportional-Integral-Derivative) controller.
@@ -449,32 +449,32 @@ pub struct FuncPidController {
 /// This struct represents a PID controller, which computes the control output based proportional,
 /// integral, and derivative terms based on the error between a setpoint and a process variable.
 /// This implementation maintains its own state, so it can be used without passing a context object.
-pub struct PidController<T: InstantLike> {
-    ctx: PidContext<T>,
-    controller: FuncPidController,
+pub struct PidController<T: InstantLike, F: FloatCore> {
+    ctx: PidContext<T, F>,
+    controller: FuncPidController<F>,
 }
 
-impl FuncPidController {
-    pub fn new(config: PidConfig) -> Self {
+impl<F: FloatCore> FuncPidController<F> {
+    pub fn new(config: PidConfig<F>) -> Self {
         FuncPidController { config }
     }
 
-    pub fn config(&self) -> &PidConfig {
+    pub fn config(&self) -> &PidConfig<F> {
         &self.config
     }
 
-    pub fn config_mut(&mut self) -> &mut PidConfig {
+    pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.config
     }
 
     pub fn compute<T: InstantLike>(
         &self,
-        mut ctx: PidContext<T>,
-        input: f64,
-        setpoint: f64,
+        mut ctx: PidContext<T, F>,
+        input: F,
+        setpoint: F,
         timestamp: T,
-        feedforward: Option<f64>,
-    ) -> (f64, PidContext<T>) {
+        feedforward: Option<F>,
+    ) -> (F, PidContext<T, F>) {
         if !ctx.is_active {
             return (ctx.last_output, ctx);
         }
@@ -515,14 +515,14 @@ impl FuncPidController {
 
         // Pass the derivative through a first-order LPF
         let derivative = self.config.smoothing_constant * raw_derivative
-            + (1.0 - self.config.smoothing_constant) * ctx.last_derivative;
+            + (F::one() - self.config.smoothing_constant) * ctx.last_derivative;
         ctx.last_derivative = derivative;
 
         // Clamp output to prevent windup
         let output = self.config.kp * error
             + ctx.i_term
             + self.config.kd * derivative
-            + feedforward.unwrap_or(0.0);
+            + feedforward.unwrap_or(F::zero());
         let clamped_output = output.clamp(self.config.output_min, self.config.output_max);
 
         if self.config.use_strict_causal_integrator {
@@ -536,18 +536,20 @@ impl FuncPidController {
         (clamped_output, ctx)
     }
 
-    fn update_integral<T: InstantLike>(&self, mut ctx: PidContext<T>, error: f64) -> PidContext<T> {
+    fn update_integral<T: InstantLike>(
+        &self,
+        mut ctx: PidContext<T, F>,
+        error: F,
+    ) -> PidContext<T, F> {
         match ctx.integrator_activity {
             IntegratorActivity::Inactive => {
-                ctx.i_term = 0.0;
+                ctx.i_term = F::zero();
             }
             IntegratorActivity::HoldIntegration => {
                 return ctx;
             }
             IntegratorActivity::Active => {
-                ctx.i_term += self.config.ki * error;
-                ctx.i_term = ctx
-                    .i_term
+                ctx.i_term = (ctx.i_term + self.config.ki * error)
                     .clamp(self.config.output_min, self.config.output_max);
             }
         }
@@ -555,30 +557,24 @@ impl FuncPidController {
     }
 }
 
-impl<T: InstantLike> PidController<T> {
-    pub fn new(config: PidConfig) -> Self {
+impl<T: InstantLike, F: FloatCore> PidController<T, F> {
+    pub fn new(config: PidConfig<F>) -> Self {
         let controller = FuncPidController::new(config);
         Self {
-            ctx: PidContext::<T>::new_uninitialized(),
+            ctx: PidContext::<T, F>::new_uninitialized(),
             controller,
         }
     }
 
-    pub fn config(&self) -> &PidConfig {
+    pub fn config(&self) -> &PidConfig<F> {
         &self.controller.config
     }
 
-    pub fn config_mut(&mut self) -> &mut PidConfig {
+    pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.controller.config
     }
 
-    pub fn compute(
-        &mut self,
-        input: f64,
-        setpoint: f64,
-        timestamp: T,
-        feedforward: Option<f64>,
-    ) -> f64 {
+    pub fn compute(&mut self, input: F, setpoint: F, timestamp: T, feedforward: Option<F>) -> F {
         let (output, ctx) =
             self.controller
                 .compute(self.ctx, input, setpoint, timestamp, feedforward);

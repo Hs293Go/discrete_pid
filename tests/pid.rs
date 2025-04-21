@@ -28,14 +28,17 @@ mod test_pid {
 
     use super::*;
 
-    pub fn make_controller() -> (FuncPidController, PidContext<Millis>) {
+    pub fn make_controller() -> (FuncPidController<f64>, PidContext<Millis, f64>) {
         let config = PidConfig::default();
         let controller = FuncPidController::new(config);
         let ctx = PidContext::new_uninitialized();
         (controller, ctx)
     }
 
-    pub fn get_next_timestamp(pid: &FuncPidController, ctx: &PidContext<Millis>) -> Millis {
+    pub fn get_next_timestamp(
+        pid: &FuncPidController<f64>,
+        ctx: &PidContext<Millis, f64>,
+    ) -> Millis {
         let now = ctx.last_time().unwrap_or(Millis(0));
         now + pid.config().sample_time()
     }
