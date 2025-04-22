@@ -20,7 +20,9 @@
 
 mod data;
 
-use robust_pid::pid::{FuncPidController, IntegratorActivity, PidConfig, PidContext};
+use robust_pid::pid::{
+    FuncPidController, IntegratorActivity, PidConfig, PidConfigBuilder, PidContext,
+};
 use robust_pid::time::{InstantLike, Millis};
 use std::time::Duration;
 
@@ -45,8 +47,13 @@ mod test_pid {
 }
 
 mod test_pid_config {
+
     use super::test_pid::make_controller;
     use super::*;
+
+    const NEW_KP: f64 = 10.0;
+    // Zero, negative and non-finite kp are invalid
+    const INVALID_KP_VALUES: &[f64; 4] = &[0.0, -1.0, f64::INFINITY, f64::NAN];
 
     #[test]
     fn test_get_and_set_kp() {
@@ -56,22 +63,36 @@ mod test_pid_config {
         // Default kp is 1
         assert_eq!(config.kp(), 1.0);
 
-        const NEW_KP: f64 = 10.0;
         // Set a new kp
-        assert!(config.set_kp(NEW_KP));
+        assert!(config.set_kp(NEW_KP).is_ok());
         assert_eq!(config.kp(), NEW_KP);
 
-        // Zero, negative and non-finite kp are invalid
-        const INVALID_VALUES: &[f64; 4] = &[0.0, -1.0, f64::INFINITY, f64::NAN];
-
-        for it in INVALID_VALUES {
+        for it in INVALID_KP_VALUES {
             // Setting negative kp should fail
-            assert!(!config.set_kp(*it));
+            assert!(config.set_kp(*it).is_err());
 
             // Failing to set kp should not change the value
             assert_eq!(config.kp(), NEW_KP);
         }
     }
+
+    #[test]
+    fn test_build_kp() {
+        let mut default_init_config = PidConfig::<f64>::default();
+        assert!(default_init_config.set_kp(NEW_KP).is_ok());
+
+        let built_config = PidConfigBuilder::default().kp(NEW_KP).build();
+        assert!(built_config.is_ok());
+        assert_eq!(built_config.unwrap().kp(), default_init_config.kp());
+
+        for it in INVALID_KP_VALUES {
+            assert!(PidConfigBuilder::default().kp(*it).build().is_err());
+        }
+    }
+
+    const NEW_KI: f64 = 10.0;
+    // Negative and non-finite ki are invalid
+    const INVALID_KI_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
 
     #[test]
     fn test_get_and_set_ki() {
@@ -81,29 +102,50 @@ mod test_pid_config {
         // Default ki is 1
         assert_eq!(config.ki(), 1.0);
 
-        const NEW_KI: f64 = 10.0;
         // Set a new ki
-        assert!(config.set_ki(NEW_KI));
+        assert!(config.set_ki(NEW_KI).is_ok());
         assert_eq!(config.ki(), NEW_KI);
 
         // Changing sample time does not change total ki
-        config.set_sample_time(Duration::from_millis(150));
+        assert!(config.set_sample_time(Duration::from_millis(150)).is_ok());
         assert_eq!(config.ki(), NEW_KI);
 
-        // Negative and non-finite ki are invalid
-        const INVALID_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
-
-        for it in INVALID_VALUES {
-            assert!(!config.set_ki(*it));
+        for it in INVALID_KI_VALUES {
+            assert!(config.set_ki(*it).is_err());
 
             // Failing to set ki should not change the value
             assert_eq!(config.ki(), NEW_KI);
         }
 
         // Zero ki is valid
-        assert!(config.set_ki(0.0));
+        assert!(config.set_ki(0.0).is_ok());
         assert_eq!(config.ki(), 0.0);
     }
+
+    #[test]
+    fn test_build_ki() {
+        let mut default_init_config = PidConfig::<f64>::default();
+        assert!(default_init_config.set_ki(NEW_KI).is_ok());
+
+        let built_config = PidConfigBuilder::default().ki(NEW_KI).build();
+        assert!(built_config.is_ok());
+        assert_eq!(built_config.unwrap().ki(), default_init_config.ki());
+
+        let built_config_2 = PidConfigBuilder::default()
+            .ki(10.0)
+            .sample_time(Duration::from_millis(200))
+            .build();
+        assert!(built_config_2.is_ok());
+        assert_eq!(built_config_2.unwrap().ki(), default_init_config.ki());
+
+        for it in INVALID_KI_VALUES {
+            assert!(PidConfigBuilder::default().ki(*it).build().is_err());
+        }
+    }
+
+    const NEW_KD: f64 = 10.0;
+    // Negative and non-finite kd are invalid
+    const INVALID_KD_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
 
     #[test]
     fn test_get_and_set_kd() {
@@ -113,29 +155,50 @@ mod test_pid_config {
         // Default kd is 0
         assert_eq!(config.kd(), 0.0);
 
-        const NEW_KD: f64 = 10.0;
         // Set a new kd
-        config.set_kd(NEW_KD);
+        assert!(config.set_kd(NEW_KD).is_ok());
         assert_eq!(config.kd(), NEW_KD);
 
         // Changing sample time does not change total kd
-        config.set_sample_time(Duration::from_millis(150));
+        assert!(config.set_sample_time(Duration::from_millis(150)).is_ok());
         assert_eq!(config.kd(), NEW_KD);
 
-        // Negative and non-finite kd are invalid
-        const INVALID_VALUES: &[f64; 3] = &[-1.0, f64::INFINITY, f64::NAN];
-
-        for it in INVALID_VALUES {
-            assert!(!config.set_kd(*it));
+        for it in INVALID_KD_VALUES {
+            assert!(config.set_kd(*it).is_err());
 
             // Failing to set kd should not change the value
             assert_eq!(config.kd(), NEW_KD);
         }
 
         // Zero kd is valid
-        assert!(config.set_kd(0.0));
+        assert!(config.set_kd(0.0).is_ok());
         assert_eq!(config.kd(), 0.0);
     }
+
+    #[test]
+    fn test_build_kd() {
+        let mut default_init_config = PidConfig::<f64>::default();
+        assert!(default_init_config.set_kd(NEW_KD).is_ok());
+
+        let built_config = PidConfigBuilder::default().kd(NEW_KD).build();
+        assert!(built_config.is_ok());
+        assert_eq!(built_config.unwrap().kd(), default_init_config.kd());
+
+        let built_config_2 = PidConfigBuilder::default()
+            .kd(10.0)
+            .sample_time(Duration::from_millis(200))
+            .build();
+        assert!(built_config_2.is_ok());
+        assert_eq!(built_config_2.unwrap().kd(), default_init_config.kd());
+
+        for it in INVALID_KD_VALUES {
+            assert!(PidConfigBuilder::default().kd(*it).build().is_err());
+        }
+    }
+
+    const NEW_TC: f64 = 10.0;
+    // Negative and non-finite filter time constants are invalid
+    const INVALID_FILTER_TC_VALUES: &[f64; 4] = &[-1.0, 0.0, f64::NAN, f64::INFINITY];
 
     #[test]
     fn test_get_and_set_filter_tc() {
@@ -145,21 +208,38 @@ mod test_pid_config {
         // Default filter time constant is 0
         assert_eq!(config.filter_tc(), 0.01);
 
-        const NEW_TC: f64 = 10.0;
         // Set a new filter time constant
-        assert!(config.set_filter_tc(NEW_TC));
+        assert!(config.set_filter_tc(NEW_TC).is_ok());
         assert_eq!(config.filter_tc(), NEW_TC);
 
-        // Negative and non-finite filter time constants are invalid
-        const INVALID_VALUES: &[f64; 4] = &[-1.0, 0.0, f64::NAN, f64::INFINITY];
-
-        for it in INVALID_VALUES {
-            assert!(!config.set_filter_tc(*it));
+        for it in INVALID_FILTER_TC_VALUES {
+            assert!(config.set_filter_tc(*it).is_err());
 
             // Failing to set filter time constant should not change the value
             assert_eq!(config.filter_tc(), NEW_TC);
         }
     }
+
+    #[test]
+    fn test_build_filter_tc() {
+        let mut default_init_config = PidConfig::<f64>::default();
+        assert!(default_init_config.set_filter_tc(NEW_TC).is_ok());
+
+        let built_config = PidConfigBuilder::default().filter_tc(NEW_TC).build();
+        assert!(built_config.is_ok());
+        assert_eq!(
+            built_config.unwrap().filter_tc(),
+            default_init_config.filter_tc()
+        );
+
+        for it in INVALID_FILTER_TC_VALUES {
+            assert!(PidConfigBuilder::default().filter_tc(*it).build().is_err());
+        }
+    }
+
+    const NEW_SAMPLE_TIME: Duration = Duration::from_millis(100);
+    // Negative and non-finite sample times are invalid
+    const INVALID_SAMPLE_TIME_VALUES: &[Duration; 2] = &[Duration::from_millis(0), Duration::MAX];
 
     #[test]
     fn test_get_and_set_sample_time() {
@@ -169,24 +249,42 @@ mod test_pid_config {
         // Default sample time is 10ms
         assert_eq!(config.sample_time(), Duration::from_millis(10));
 
-        const NEW_SAMPLE_TIME: Duration = Duration::from_millis(100);
         let gains = (config.kp(), config.ki(), config.kd());
         // Set a new sample time
-        assert!(config.set_sample_time(NEW_SAMPLE_TIME));
+        assert!(config.set_sample_time(NEW_SAMPLE_TIME).is_ok());
         assert_eq!(config.sample_time(), NEW_SAMPLE_TIME);
 
         // Changing sample time does not change any of kp/ki/kd
         let gains_round_trip = (config.kp(), config.ki(), config.kd());
         assert_eq!(gains, gains_round_trip);
 
-        // Negative and non-finite sample times are invalid
-        const INVALID_VALUES: &[Duration; 2] = &[Duration::from_millis(0), Duration::MAX];
-
-        for it in INVALID_VALUES {
-            assert!(!config.set_sample_time(*it));
+        for it in INVALID_SAMPLE_TIME_VALUES {
+            assert!(config.set_sample_time(*it).is_err());
 
             // Failing to set sample time should not change the value
             assert_eq!(config.sample_time(), NEW_SAMPLE_TIME);
+        }
+    }
+
+    #[test]
+    fn test_build_sample_time() {
+        let mut default_init_config = PidConfig::<f64>::default();
+        assert!(default_init_config.set_sample_time(NEW_SAMPLE_TIME).is_ok());
+
+        let built_config = PidConfigBuilder::<f64>::default()
+            .sample_time(NEW_SAMPLE_TIME)
+            .build();
+        assert!(built_config.is_ok());
+        assert_eq!(
+            built_config.unwrap().sample_time(),
+            default_init_config.sample_time()
+        );
+
+        for it in INVALID_SAMPLE_TIME_VALUES {
+            assert!(PidConfigBuilder::<f64>::default()
+                .sample_time(*it)
+                .build()
+                .is_err());
         }
     }
 }
@@ -202,8 +300,8 @@ mod test_pid_qualitative_performance {
         fn test_pure_proportional_control() {
             let (mut pid, ctx) = make_controller();
             let config = pid.config_mut();
-            config.set_ki(0.0);
-            config.set_kd(0.0);
+            assert!(config.set_ki(0.0).is_ok());
+            assert!(config.set_kd(0.0).is_ok());
 
             let (_, ctx) = pid.compute(ctx, 0.5, 1.0, get_next_timestamp(&pid, &ctx), None);
             let output = ctx.output();
@@ -241,7 +339,7 @@ mod test_pid_qualitative_performance {
             let limit: f64 =
                 BASE_ERROR * (1.0 + N_STEPS as f64 * pid.config().sample_time().as_secs_f64());
 
-            pid.config_mut().set_output_limits(-limit, limit);
+            assert!(pid.config_mut().set_output_limits(-limit, limit).is_ok());
 
             for i in 0..10 {
                 // Setpoint is constant, but input (process value) is held unchanged, so integral
@@ -270,7 +368,7 @@ mod test_pid_qualitative_performance {
             let limit: f64 =
                 BASE_ERROR * (1.0 + N_STEPS as f64 * pid.config().sample_time().as_secs_f64());
 
-            pid.config_mut().set_output_limits(-limit, limit);
+            assert!(pid.config_mut().set_output_limits(-limit, limit).is_ok());
 
             for i in 0..10 {
                 // Setpoint is constant, but input (process value) is held unchanged, so integral
@@ -323,7 +421,7 @@ mod test_pid_qualitative_performance {
         fn test_derivative_boosting_and_damping() {
             let (mut pid, mut ctx) = make_controller();
 
-            pid.config_mut().set_kd(1.0);
+            assert!(pid.config_mut().set_kd(1.0).is_ok());
 
             // An initial step to start storing error/input
             (_, ctx) = pid.compute(ctx, 0.0, 5.0, get_next_timestamp(&pid, &ctx), None);
@@ -338,7 +436,7 @@ mod test_pid_qualitative_performance {
             let (output_with_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
-            pid.config_mut().set_kd(0.0);
+            assert!(pid.config_mut().set_kd(0.0).is_ok());
             let (output_no_derivative, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
@@ -353,7 +451,7 @@ mod test_pid_qualitative_performance {
         fn test_derivative_kick_mitigation() {
             let (mut pid, mut ctx) = make_controller();
 
-            pid.config_mut().set_kd(1.0);
+            assert!(pid.config_mut().set_kd(1.0).is_ok());
 
             // An initial step to start storing error/input
             (_, ctx) = pid.compute(ctx, 0.0, 5.0, get_next_timestamp(&pid, &ctx), None);
@@ -443,8 +541,8 @@ mod test_pid_numerical_performance {
         let (mut pid, mut ctx) = make_controller();
 
         // Set non-default D-gain and filter time constant
-        assert!(pid.config_mut().set_kd(0.01));
-        assert!(pid.config_mut().set_filter_tc(0.02));
+        assert!(pid.config_mut().set_kd(0.01).is_ok());
+        assert!(pid.config_mut().set_filter_tc(0.02).is_ok());
 
         let mut output: f64;
 

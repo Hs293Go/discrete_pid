@@ -24,6 +24,9 @@ use crate::time::InstantLike;
 use core::time::Duration;
 use num_traits::float::FloatCore;
 
+#[cfg(feature = "std")]
+use thiserror::Error;
+
 #[derive(Copy, Clone, Debug)]
 pub struct PidConfig<F: FloatCore> {
     /// Proportional gain coefficient.
@@ -87,6 +90,38 @@ impl<F: FloatCore> Default for PidConfig<F> {
     }
 }
 
+#[cfg_attr(feature = "std", derive(Error))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PidConfigError {
+    #[cfg_attr(
+        feature = "std",
+        error("Proportional gain is non-positive or non-finite")
+    )]
+    InvalidProportionalGain = 1,
+
+    #[cfg_attr(feature = "std", error("Integral gain is negative or non-finite"))]
+    InvalidIntegralGain = 2,
+
+    #[cfg_attr(feature = "std", error("Derivative gain is negative or non-finite"))]
+    InvalidDerivativeGain = 3,
+
+    #[cfg_attr(
+        feature = "std",
+        error("Filter time constant is non-positive or non-finite")
+    )]
+    InvalidSampleTime = 4,
+
+    #[cfg_attr(feature = "std", error("Output limits are flipped or NAN"))]
+    InvalidOutputLimits = 5,
+
+    #[cfg_attr(
+        feature = "std",
+        error("Filter time constant is non-positive or non-finite")
+    )]
+    InvalidFilterTimeConstant = 6,
+}
+
 impl<F: FloatCore> PidConfig<F> {
     /// Returns the proportional gain.
     pub fn kp(&self) -> F {
@@ -137,6 +172,48 @@ impl<F: FloatCore> PidConfig<F> {
         self.use_derivative_on_measurement
     }
 
+    fn check_kp(kp: F) -> Result<(), PidConfigError> {
+        if kp <= F::zero() || !kp.is_finite() {
+            return Err(PidConfigError::InvalidProportionalGain);
+        }
+        Ok(())
+    }
+
+    fn check_ki(ki: F) -> Result<(), PidConfigError> {
+        if ki < F::zero() || !ki.is_finite() {
+            return Err(PidConfigError::InvalidIntegralGain);
+        }
+        Ok(())
+    }
+
+    fn check_kd(kd: F) -> Result<(), PidConfigError> {
+        if kd < F::zero() || !kd.is_finite() {
+            return Err(PidConfigError::InvalidDerivativeGain);
+        }
+        Ok(())
+    }
+
+    fn check_filter_tc(filter_tc: F) -> Result<(), PidConfigError> {
+        if filter_tc <= F::zero() || !filter_tc.is_finite() {
+            return Err(PidConfigError::InvalidFilterTimeConstant);
+        }
+        Ok(())
+    }
+
+    fn check_sample_time(sample_time: Duration) -> Result<(), PidConfigError> {
+        if sample_time.is_zero() || sample_time == Duration::MAX {
+            return Err(PidConfigError::InvalidSampleTime);
+        }
+        Ok(())
+    }
+
+    fn check_output_limits(output_min: F, output_max: F) -> Result<(), PidConfigError> {
+        if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
+            return Err(PidConfigError::InvalidOutputLimits);
+        }
+        Ok(())
+    }
+
     /// Sets the proportional gain.
     ///
     /// The proportional gain must be greater than zero. If the user intends to disable the PID
@@ -146,14 +223,12 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `kp`: The new proportional gain.
     ///
     /// # Returns
-    /// - `true` if the gain was set successfully.
-    /// - `false` if the gain is less than or equal to zero or not finite.
-    pub fn set_kp(&mut self, kp: F) -> bool {
-        if kp <= F::zero() || !kp.is_finite() {
-            return false;
-        }
+    /// - `Ok(())` if the gain was set successfully.
+    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than or equal to zero or not finite.
+    pub fn set_kp(&mut self, kp: F) -> Result<(), PidConfigError> {
+        Self::check_kp(kp)?;
         self.kp = kp;
-        true
+        Ok(())
     }
 
     /// Sets the integral gain.
@@ -165,14 +240,12 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `ki`: The new integral gain.
     ///
     /// # Returns
-    /// - `true` if the gain was set successfully.
-    /// - `false` if the gain is less than zero or not finite.
-    pub fn set_ki(&mut self, ki: F) -> bool {
-        if ki < F::zero() || !ki.is_finite() {
-            return false;
-        }
+    /// - `Ok(())` if the gain was set successfully.
+    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than zero or not finite.
+    pub fn set_ki(&mut self, ki: F) -> Result<(), PidConfigError> {
+        Self::check_ki(ki)?;
         self.ki = ki * F::from(self.sample_time.as_secs_f64()).unwrap();
-        true
+        Ok(())
     }
 
     /// Sets the derivative gain.
@@ -184,14 +257,12 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `kd`: The new derivative gain.
     ///
     /// # Returns
-    /// - `true` if the gain was set successfully.
-    /// - `false` if the gain is less than zero or not finite.
-    pub fn set_kd(&mut self, kd: F) -> bool {
-        if kd < F::zero() || !kd.is_finite() {
-            return false;
-        }
+    /// - `Ok(())` if the gain was set successfully.
+    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than zero or not finite.
+    pub fn set_kd(&mut self, kd: F) -> Result<(), PidConfigError> {
+        Self::check_kd(kd)?;
         self.kd = kd / F::from(self.sample_time.as_secs_f64()).unwrap();
-        true
+        Ok(())
     }
 
     /// Sets the time constant for the low-pass filter applied to the derivative term.
@@ -200,18 +271,14 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `filter_tc`: The new time constant for the filter.
     ///
     /// # Returns
-    /// - `true` if the time constant was set successfully.
-    /// - `false` if the time constant is less than or equal to zero or non finite.
-    pub fn set_filter_tc(&mut self, filter_tc: F) -> bool {
-        if filter_tc <= F::zero() || !filter_tc.is_finite() {
-            return false;
-        }
-
+    /// - `Ok(())` if the time constant was set successfully.
+    /// - `Err(PidConfigError::InvalidFilterTimeConstant)` if the time constant is less than or equal to zero or non finite.
+    pub fn set_filter_tc(&mut self, filter_tc: F) -> Result<(), PidConfigError> {
+        Self::check_filter_tc(filter_tc)?;
         let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
         self.smoothing_constant = delta_t / (delta_t + filter_tc);
-
         self.filter_tc = filter_tc;
-        true
+        Ok(())
     }
 
     /// Sets the sample time for the PID controller. Rescales the integral and derivative gains and
@@ -221,12 +288,10 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `sample_time`: The new sample time.
     ///
     /// # Returns
-    /// - `true` if the sample time was set successfully.
-    /// - `false` if the sample time is zero or max
-    pub fn set_sample_time(&mut self, sample_time: Duration) -> bool {
-        if sample_time.is_zero() || sample_time == Duration::MAX {
-            return false;
-        }
+    /// - `Ok(())` if the sample time was set successfully.
+    /// - `Err(PidConfigError::InvalidSampleTime)` if the sample time is zero or max
+    pub fn set_sample_time(&mut self, sample_time: Duration) -> Result<(), PidConfigError> {
+        Self::check_sample_time(sample_time)?;
 
         let ratio = F::from(sample_time.as_secs_f64() / self.sample_time.as_secs_f64()).unwrap();
 
@@ -237,7 +302,7 @@ impl<F: FloatCore> PidConfig<F> {
         self.smoothing_constant = delta_t / (delta_t + self.filter_tc);
 
         self.sample_time = sample_time;
-        true
+        Ok(())
     }
 
     /// Sets the minimum and maximum output limits for the PID controller.
@@ -249,18 +314,20 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `output_max`: The maximum output limit.
     ///
     /// # Returns
-    /// - `true` if the limits were set successfully.
-    /// - `false` if the minimum limit is greater than or equal to the maximum limit, or either
+    /// - `Ok(())` if the limits were set successfully.
+    /// - `Err(PidConfigError::InvalidOutputLimits)` if the minimum limit is greater than or equal to the maximum limit, or either
     ///   limit is not finite.
-    pub fn set_output_limits(&mut self, output_min: F, output_max: F) -> bool {
-        if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
-            return false;
-        }
+    pub fn set_output_limits(
+        &mut self,
+        output_min: F,
+        output_max: F,
+    ) -> Result<(), PidConfigError> {
+        Self::check_output_limits(output_min, output_max)?;
 
         self.output_min = output_min;
         self.output_max = output_max;
 
-        true
+        Ok(())
     }
 
     /// Sets whether to use a strict causal integrator.
@@ -271,6 +338,121 @@ impl<F: FloatCore> PidConfig<F> {
     /// Sets whether to apply the derivative on the measurement.
     pub fn set_use_derivative_on_measurement(&mut self, use_derivative_on_measurement: bool) {
         self.use_derivative_on_measurement = use_derivative_on_measurement;
+    }
+}
+
+#[derive(Debug)]
+pub struct PidConfigBuilder<F: FloatCore> {
+    kp: F,
+    total_ki: F,
+    total_kd: F,
+    filter_tc: F,
+    sample_time: Duration,
+    output_min: F,
+    output_max: F,
+    use_strict_causal_integrator: bool,
+    use_derivative_on_measurement: bool,
+}
+
+impl<F: FloatCore> Default for PidConfigBuilder<F> {
+    fn default() -> Self {
+        Self {
+            kp: F::one(),
+            total_ki: F::from(0.01).unwrap(),
+            total_kd: F::zero(),
+            filter_tc: F::from(0.01).unwrap(),
+            sample_time: Duration::from_millis(10),
+            output_min: -F::infinity(),
+            output_max: F::infinity(),
+            use_strict_causal_integrator: true,
+            use_derivative_on_measurement: false,
+        }
+    }
+}
+
+impl<F: FloatCore> PidConfigBuilder<F> {
+    /// Configures the proportional gain of the PID controller to be built.
+    ///
+    /// # Arguments
+    /// - `kp`: The new proportional gain.
+    pub fn kp(mut self, kp: F) -> Self {
+        self.kp = kp;
+        self
+    }
+
+    /// Configures the integral gain of the PID controller to be built.
+    ///
+    /// The user passes in a 'total' integral gain, which is scaled by the sample time to produce
+    /// the actual ki value used in the PID algorithm.
+    ///
+    /// # Arguments
+    /// - `ki`: The new integral gain.
+    pub fn ki(mut self, total_ki: F) -> Self {
+        self.total_ki = total_ki;
+        self
+    }
+
+    /// Configures the derivative gain of the PID controller to be built.
+    ///
+    /// The user passes in a 'total' derivative gain, which is scaled inversely by the sample time to produce
+    /// the actual kd value used in the PID algorithm.
+    ///
+    /// # Arguments
+    /// - `kd`: The new derivative gain.
+    pub fn kd(mut self, total_kd: F) -> Self {
+        self.total_kd = total_kd;
+        self
+    }
+
+    pub fn filter_tc(mut self, filter_tc: F) -> Self {
+        self.filter_tc = filter_tc;
+        self
+    }
+
+    pub fn sample_time(mut self, sample_time: Duration) -> Self {
+        self.sample_time = sample_time;
+        self
+    }
+
+    pub fn output_limits(mut self, min: F, max: F) -> Self {
+        self.output_min = min;
+        self.output_max = max;
+        self
+    }
+
+    pub fn use_strict_causal_integrator(mut self, enabled: bool) -> Self {
+        self.use_strict_causal_integrator = enabled;
+        self
+    }
+
+    pub fn use_derivative_on_measurement(mut self, enabled: bool) -> Self {
+        self.use_derivative_on_measurement = enabled;
+        self
+    }
+
+    pub fn build(self) -> Result<PidConfig<F>, PidConfigError> {
+        PidConfig::check_kp(self.kp)?;
+        PidConfig::check_ki(self.total_ki)?;
+        PidConfig::check_kd(self.total_kd)?;
+        PidConfig::check_filter_tc(self.filter_tc)?;
+        PidConfig::<F>::check_sample_time(self.sample_time)?;
+        PidConfig::check_output_limits(self.output_min, self.output_max)?;
+
+        let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
+        let smoothing_constant = delta_t / (delta_t + self.filter_tc);
+
+        Ok(PidConfig {
+            kp: self.kp,
+            ki: self.total_ki * delta_t,
+            kd: self.total_kd / delta_t,
+            filter_tc: self.filter_tc,
+            sample_time: self.sample_time,
+            output_min: self.output_min,
+            output_max: self.output_max,
+            use_strict_causal_integrator: self.use_strict_causal_integrator,
+            use_derivative_on_measurement: self.use_derivative_on_measurement,
+            smoothing_constant,
+        })
     }
 }
 
