@@ -197,9 +197,9 @@ mod control {
     impl RateControllerContext {
         pub fn new() -> Self {
             RateControllerContext([
-                pid::PidContext::<Millis, f64>::new_uninitialized(),
-                pid::PidContext::<Millis, f64>::new_uninitialized(),
-                pid::PidContext::<Millis, f64>::new_uninitialized(),
+                pid::PidContext::<Millis, f64>::new_uninit(),
+                pid::PidContext::<Millis, f64>::new_uninit(),
+                pid::PidContext::<Millis, f64>::new_uninit(),
             ])
         }
     }
