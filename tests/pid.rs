@@ -21,8 +21,9 @@
 mod data;
 
 use robust_pid::pid::{
-    FuncPidController, IntegratorActivity, PidConfig, PidConfigBuilder, PidContext,
+    FuncPidController, IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError, PidContext,
 };
+
 use robust_pid::time::{InstantLike, Millis};
 use std::time::Duration;
 
@@ -69,7 +70,10 @@ mod test_pid_config {
 
         for it in INVALID_KP_VALUES {
             // Setting negative kp should fail
-            assert!(config.set_kp(*it).is_err());
+            assert_eq!(
+                config.set_kp(*it),
+                Err(PidConfigError::InvalidProportionalGain)
+            );
 
             // Failing to set kp should not change the value
             assert_eq!(config.kp(), NEW_KP);
@@ -86,7 +90,10 @@ mod test_pid_config {
         assert_eq!(built_config.unwrap().kp(), default_init_config.kp());
 
         for it in INVALID_KP_VALUES {
-            assert!(PidConfigBuilder::default().kp(*it).build().is_err());
+            assert_eq!(
+                PidConfigBuilder::default().kp(*it).build().map(|_| ()),
+                Err(PidConfigError::InvalidProportionalGain)
+            );
         }
     }
 
@@ -111,7 +118,7 @@ mod test_pid_config {
         assert_eq!(config.ki(), NEW_KI);
 
         for it in INVALID_KI_VALUES {
-            assert!(config.set_ki(*it).is_err());
+            assert_eq!(config.set_ki(*it), Err(PidConfigError::InvalidIntegralGain));
 
             // Failing to set ki should not change the value
             assert_eq!(config.ki(), NEW_KI);
@@ -139,7 +146,10 @@ mod test_pid_config {
         assert_eq!(built_config_2.unwrap().ki(), default_init_config.ki());
 
         for it in INVALID_KI_VALUES {
-            assert!(PidConfigBuilder::default().ki(*it).build().is_err());
+            assert_eq!(
+                PidConfigBuilder::default().ki(*it).build().map(|_| ()),
+                Err(PidConfigError::InvalidIntegralGain)
+            );
         }
     }
 
@@ -164,7 +174,10 @@ mod test_pid_config {
         assert_eq!(config.kd(), NEW_KD);
 
         for it in INVALID_KD_VALUES {
-            assert!(config.set_kd(*it).is_err());
+            assert_eq!(
+                config.set_kd(*it),
+                Err(PidConfigError::InvalidDerivativeGain)
+            );
 
             // Failing to set kd should not change the value
             assert_eq!(config.kd(), NEW_KD);
@@ -192,7 +205,10 @@ mod test_pid_config {
         assert_eq!(built_config_2.unwrap().kd(), default_init_config.kd());
 
         for it in INVALID_KD_VALUES {
-            assert!(PidConfigBuilder::default().kd(*it).build().is_err());
+            assert_eq!(
+                PidConfigBuilder::default().kd(*it).build().map(|_| ()),
+                Err(PidConfigError::InvalidDerivativeGain)
+            );
         }
     }
 
@@ -213,7 +229,10 @@ mod test_pid_config {
         assert_eq!(config.filter_tc(), NEW_TC);
 
         for it in INVALID_FILTER_TC_VALUES {
-            assert!(config.set_filter_tc(*it).is_err());
+            assert_eq!(
+                config.set_filter_tc(*it),
+                Err(PidConfigError::InvalidFilterTimeConstant)
+            );
 
             // Failing to set filter time constant should not change the value
             assert_eq!(config.filter_tc(), NEW_TC);
@@ -233,7 +252,13 @@ mod test_pid_config {
         );
 
         for it in INVALID_FILTER_TC_VALUES {
-            assert!(PidConfigBuilder::default().filter_tc(*it).build().is_err());
+            assert_eq!(
+                PidConfigBuilder::default()
+                    .filter_tc(*it)
+                    .build()
+                    .map(|_| ()),
+                Err(PidConfigError::InvalidFilterTimeConstant)
+            );
         }
     }
 
@@ -259,7 +284,10 @@ mod test_pid_config {
         assert_eq!(gains, gains_round_trip);
 
         for it in INVALID_SAMPLE_TIME_VALUES {
-            assert!(config.set_sample_time(*it).is_err());
+            assert_eq!(
+                config.set_sample_time(*it),
+                Err(PidConfigError::InvalidSampleTime)
+            );
 
             // Failing to set sample time should not change the value
             assert_eq!(config.sample_time(), NEW_SAMPLE_TIME);
@@ -281,10 +309,13 @@ mod test_pid_config {
         );
 
         for it in INVALID_SAMPLE_TIME_VALUES {
-            assert!(PidConfigBuilder::<f64>::default()
-                .sample_time(*it)
-                .build()
-                .is_err());
+            assert_eq!(
+                PidConfigBuilder::<f64>::default()
+                    .sample_time(*it)
+                    .build()
+                    .map(|_| ()),
+                Err(PidConfigError::InvalidSampleTime)
+            );
         }
     }
 }
@@ -513,6 +544,28 @@ mod test_pid_qualitative_performance {
 
             // Check that output is different from the last output
             assert_ne!(output, last_output);
+        }
+
+        #[test]
+        fn test_deactivation_before_first_computation() {
+            let (pid, mut ctx) = make_controller();
+            let mut output;
+            ctx.deactivate();
+
+            // Attempt to compute with deactivated PID
+            (output, ctx) = pid.compute(ctx, 0.0, 1.5, get_next_timestamp(&pid, &ctx), None);
+
+            assert!(!ctx.is_active());
+            assert!(!ctx.is_initialized());
+            assert_eq!(output, 0.0);
+
+            ctx.activate();
+
+            (output, ctx) = pid.compute(ctx, 0.0, 1.5, get_next_timestamp(&pid, &ctx), None);
+
+            assert!(ctx.is_active());
+            assert!(ctx.is_initialized());
+            assert_eq!(output, 1.5); // Assuming kp = 1.0
         }
     }
 }
