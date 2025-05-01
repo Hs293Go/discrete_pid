@@ -507,7 +507,7 @@ pub struct PidContext<T: InstantLike, F: FloatCore> {
 impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
     /// Creates a new uninitialized PID context. This context is automatically initialized when the
     /// PID controller computes its first output.
-    pub fn new_uninitialized() -> Self {
+    pub fn new_uninit() -> Self {
         Default::default()
     }
 
@@ -523,7 +523,7 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
     /// - `timestamp`: The timestamp of the initialization.
     /// - `input`: The input (process value) at the time of initialization.
     /// - `output`: The output of the PID controller at the time of initialization.
-    pub fn new_initialize(timestamp: T, input: F, output: F) -> Self {
+    pub fn new(timestamp: T, input: F, output: F) -> Self {
         Self {
             i_term: output,
             last_err: F::zero(),
@@ -740,10 +740,10 @@ impl<F: FloatCore> FuncPidController<F> {
 }
 
 impl<T: InstantLike, F: FloatCore> PidController<T, F> {
-    pub fn new(config: PidConfig<F>) -> Self {
+    pub fn new_uninit(config: PidConfig<F>) -> Self {
         let controller = FuncPidController::new(config);
         Self {
-            ctx: PidContext::<T, F>::new_uninitialized(),
+            ctx: PidContext::<T, F>::new_uninit(),
             controller,
         }
     }
