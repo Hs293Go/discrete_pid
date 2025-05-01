@@ -22,6 +22,7 @@ mod data;
 
 use robust_pid::pid::{
     FuncPidController, IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError, PidContext,
+    PidController,
 };
 
 use robust_pid::time::{InstantLike, Millis};
@@ -38,12 +39,25 @@ mod test_pid {
         (controller, ctx)
     }
 
+    pub fn make_stateful_controller() -> PidController<Millis, f64> {
+        let config = PidConfig::default();
+        PidController::new_uninit(config)
+    }
+
     pub fn get_next_timestamp(
         pid: &FuncPidController<f64>,
         ctx: &PidContext<Millis, f64>,
     ) -> Millis {
         let now = ctx.last_time().unwrap_or(Millis(0));
         now + pid.config().sample_time()
+    }
+
+    pub fn get_next_timestamp_stateful(pid: &PidController<Millis, f64>) -> Millis {
+        pid.last_time().unwrap_or(Millis(0)) + pid.config().sample_time()
+    }
+
+    pub fn sine_signal(time: Millis, initial_time: Millis) -> f64 {
+        time.duration_since(initial_time).as_secs_f64().sin()
     }
 }
 
@@ -571,13 +585,10 @@ mod test_pid_qualitative_performance {
 }
 
 mod test_pid_numerical_performance {
-    use super::test_pid::make_controller;
+    use super::test_pid::*;
     use super::*;
     use approx::assert_relative_eq;
 
-    fn sine_signal(time: Millis, initial_time: Millis) -> f64 {
-        time.duration_since(initial_time).as_secs_f64().sin()
-    }
     /// To recreate these test results, create the following simulink model
     ///
     /// ┌───────────┐       ┌─────────────────────────┐        ┌───────────┐
@@ -636,6 +647,90 @@ mod test_pid_numerical_performance {
                 );
             }
             state = gain * output;
+        }
+    }
+}
+
+mod test_stateful_pid {
+    use super::data::*;
+    use super::test_pid::*;
+    use super::*;
+
+    #[test]
+    fn test_lazy_initialization_and_reset() {
+        let mut pid = make_stateful_controller();
+
+        // Should be uninitialized initially
+        assert!(!pid.is_initialized());
+
+        let timestamp = Millis(0);
+        let _ = pid.compute(0.0, 1.0, timestamp, None);
+
+        // Should be initialized after first compute
+        assert!(pid.is_initialized());
+        assert!(pid.is_active());
+
+        pid.deactivate();
+        assert!(!pid.is_active());
+
+        pid.activate();
+        assert!(pid.is_active());
+    }
+
+    #[test]
+    fn test_integrator_control_flow() {
+        let mut pid = make_stateful_controller();
+
+        let base_error = 2.0;
+        let _ = pid.compute(0.0, base_error, Millis(0), None);
+
+        pid.set_integrator_activity(IntegratorActivity::HoldIntegration);
+
+        const NUM_ITERS: usize = 10;
+        let held_output = (0..NUM_ITERS).fold(0.0, |_, _| {
+            pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
+        });
+
+        pid.set_integrator_activity(IntegratorActivity::Inactive);
+        let inactive_output = (0..NUM_ITERS).fold(0.0, |_, _| {
+            pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
+        });
+
+        pid.set_integrator_activity(IntegratorActivity::Active);
+
+        let active_output = (0..NUM_ITERS).fold(0.0, |_, _| {
+            pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
+        });
+
+        // Outputs should differ because integrator is reset and resumes
+        assert!(active_output > inactive_output, "Expected active output ({active_output}) to be greater than inactive output ({inactive_output})");
+        assert!(held_output > inactive_output, "Expected held output ({held_output}) to be greater than inactive output ({inactive_output})");
+    }
+
+    #[test]
+    fn test_forwarding_to_stateful_pid_open_loop_numerical_equivalence() {
+        let (mut func_pid, mut ctx) = make_controller();
+
+        let mut stateful_pid = make_stateful_controller();
+
+        // Set non-default D-gain and filter time constant
+        assert!(func_pid.config_mut().set_kd(0.01).is_ok());
+        assert!(func_pid.config_mut().set_filter_tc(0.02).is_ok());
+        assert!(stateful_pid.config_mut().set_kd(0.01).is_ok());
+        assert!(stateful_pid.config_mut().set_filter_tc(0.02).is_ok());
+
+        let mut expected: f64;
+
+        for i in 0..1000usize {
+            let last_time = ctx.last_time().unwrap_or(Millis(0));
+            let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
+
+            let sine_signal = sine_signal(last_time, Millis(0));
+            (expected, ctx) = func_pid.compute(ctx, 0.0, sine_signal, timestamp, None);
+
+            let result = stateful_pid.compute(0.0, sine_signal, timestamp, None);
+
+            assert_eq!(result, expected);
         }
     }
 }

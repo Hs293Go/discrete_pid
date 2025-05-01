@@ -748,6 +748,14 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
     }
 
+    pub fn new(config: PidConfig<F>, timestamp: T, input: F, output: F) -> Self {
+        let controller = FuncPidController::new(config);
+        Self {
+            ctx: PidContext::<T, F>::new(timestamp, input, output),
+            controller,
+        }
+    }
+
     pub fn config(&self) -> &PidConfig<F> {
         &self.controller.config
     }
@@ -764,11 +772,57 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         output
     }
 
+    /// Returns the output (last computed value) of the PID controller.
+    pub fn output(&self) -> F {
+        self.ctx.last_output
+    }
+
+    /// Returns the error (difference between setpoint and input) of the PID controller.
+    pub fn error(&self) -> F {
+        self.ctx.last_err
+    }
+
+    /// Returns the last time the PID controller was computed.
+    pub fn last_time(&self) -> Option<T> {
+        self.ctx.last_time
+    }
+
+    /// Queries whether the PID controller is active.
+    pub fn is_active(&self) -> bool {
+        self.ctx.is_active
+    }
+
+    /// Queries the integrator activity level of the PID controller.
+    pub fn integrator_activity(&self) -> IntegratorActivity {
+        self.ctx.integrator_activity
+    }
+
+    /// Queries whether the PID controller has been initialized.
+    pub fn is_initialized(&self) -> bool {
+        self.ctx.is_initialized
+    }
+
+    /// Activates the PID controller. If the controller was previously inactive, it will be
+    /// reinitialized.
     pub fn activate(&mut self) {
         self.ctx.activate();
     }
 
+    /// Deactivates the PID controller. The output will not be updated and the last output will be
+    /// held unchanged.
     pub fn deactivate(&mut self) {
         self.ctx.deactivate();
+    }
+
+    /// Resets the integral term of the PID controller to zero.
+    pub fn reset_integral(&mut self) {
+        self.ctx.reset_integral();
+    }
+
+    /// Sets the integrator activity level of the PID controller.
+    /// If the activity level is set to `Inactive` from any other state, the integral term will be
+    /// reset to zero.
+    pub fn set_integrator_activity(&mut self, activity: IntegratorActivity) {
+        self.ctx.set_integrator_activity(activity);
     }
 }
