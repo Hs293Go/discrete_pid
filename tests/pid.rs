@@ -34,7 +34,7 @@ mod test_pid {
     pub fn make_controller() -> (FuncPidController<f64>, PidContext<Millis, f64>) {
         let config = PidConfig::default();
         let controller = FuncPidController::new(config);
-        let ctx = PidContext::new_uninitialized();
+        let ctx = PidContext::new_uninit();
         (controller, ctx)
     }
 
