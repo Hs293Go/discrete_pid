@@ -59,6 +59,32 @@ mod test_pid {
     pub fn sine_signal(time: Millis, initial_time: Millis) -> f64 {
         time.duration_since(initial_time).as_secs_f64().sin()
     }
+
+    pub struct MassSpringDamper {
+        pub natural_frequency: f64,
+        pub damping_ratio: f64,
+    }
+
+    impl MassSpringDamper {
+        /// Implements the state-space realization of the mass-spring-damper system:
+        /// ┌     ┐   ┌              ┐┌    ┐   ┌     ┐
+        /// │ p'  │ = │  0     1     ││ p  │ + │ 0   │ u
+        /// │ p'' │   │  -ωₙ²  -2ζωₙ ││ p' │   │ ωₙ² │
+        /// └     ┘   └              ┘└    ┘   └     ┘
+        ///     ┌      ┐┌    ┐
+        /// p = │ 1  0 ││ p  │         
+        ///     └      ┘│ p' │
+        ///             └    ┘
+        pub fn eval(&self, x: [f64; 2], u: f64) -> [f64; 2] {
+            let omega_sq = self.natural_frequency.powi(2);
+            let two_zeta_omega = 2.0 * self.natural_frequency * self.damping_ratio;
+
+            [
+                x[1],                                                    // First component
+                -two_zeta_omega * x[1] - omega_sq * x[0] + omega_sq * u, // Second component
+            ]
+        }
+    }
 }
 
 mod test_pid_config {
@@ -585,6 +611,7 @@ mod test_pid_qualitative_performance {
 }
 
 mod test_pid_numerical_performance {
+    use super::data::*;
     use super::test_pid::*;
     use super::*;
     use approx::assert_relative_eq;
@@ -593,13 +620,16 @@ mod test_pid_numerical_performance {
     ///
     /// ┌───────────┐       ┌─────────────────────────┐        ┌───────────┐
     /// │ sine wave │       │ Discrete PID            │        │ To        │
-    /// │           │------ │ Filt. Met.: Back. Euler │------- │ Workspace │
+    /// │           │───────│ Filt. Met.: Back. Euler │────────│ Workspace │
     /// │ (default) │       │ Derivative: 0.01        │        │           │
-    /// └───────────┘       └─────────────────────────┘        └───────────┘
+    /// └───────────┘       │ Filter Coeff: 50        │        └───────────┘
+    ///                     └─────────────────────────┘        
+    ///
+    /// and using the ODE1 (Euler) solver with a fixed step size of 0.01
     ///
     /// Then copy the saved data in intervals of 20 steps, i.e. 1:20:end
     /// Though this is an open-loop test, this test effectively engages the D-term and the filter in
-    /// the D-term, even if both are configured with non-default parameters.
+    /// the D-term, since both are configured with non-default parameters.
     #[test]
     fn test_simulink_open_loop_behavior_compliance() {
         let (mut pid, mut ctx) = make_controller();
@@ -612,41 +642,69 @@ mod test_pid_numerical_performance {
 
         for i in 0..1000usize {
             let last_time = ctx.last_time().unwrap_or(Millis(0));
-            let timestamp = last_time + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
+            let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
 
             let sine_signal = sine_signal(last_time, Millis(0));
             (output, ctx) = pid.compute(ctx, 0.0, sine_signal, timestamp, None);
             if i % 20 == 0 {
-                assert_relative_eq!(
-                    output,
-                    data::OL_SINE_RESPONSE_50MS[i / 20usize],
-                    epsilon = 1e-12
-                );
+                assert_relative_eq!(output, OL_SINE_RESPONSE_50MS[i / 20usize], epsilon = 1e-12);
             }
         }
     }
 
+    /// To recreate these test results, create the following simulink model
+    ///
+    /// ┌───────────┐       ┌─────────────────────────┐       ┌─────────────┐       ┌───────────┐
+    /// │ sine wave │       │ Discrete PID            │       │ State space │       │ To        │
+    /// │           │──+X───│ Filt. Met.: Back. Euler │───────│ Ax + Bu     │───┬───│ Workspace │
+    /// │ (default) │   -   │ Derivative: 0.01        │       │ Cx + Du     │   │   │           │
+    /// └───────────┘   │   │ Filter Coeff: 50        │       └─────────────┘   │   └───────────┘
+    ///                 │   └─────────────────────────┘                         │
+    ///                 └───────────────────────────────────────────────────────┘
+    ///
+    /// where A = [0, 1; -4 * pi^2, -0.8 * 2 * pi], B = [0; 4 * pi^2], C = [1, 0], D = [0],
+    /// the state-space realization of the mass-spring-damper system:
+    ///
+    /// x'' + 2ζωₙx' + ωₙ²x = u,     ωₙ = 2π, ζ = 0.2
+    ///
+    /// and using the ODE1 (Euler) solver with a fixed step size of 0.01
+    ///
+    /// Then copy the saved data in intervals of 20 steps, i.e. 1:20:end
+    /// This is a closed-loop test, the output of the PID is fed back to the input of a LTI system
+    /// (a mass-spring-damper system). This test validates the PID controller's ability to
+    /// stabilize and control nontrivial systems like the Simulink PID block does.
     #[test]
     fn test_simulink_closed_loop_behavior_compliance() {
-        let (pid, mut ctx) = make_controller();
+        let (mut pid, mut ctx) = make_controller();
 
-        let gain = 0.8;
+        // Set non-default D-gain and filter time constant
+        assert!(pid.config_mut().set_kd(0.01).is_ok());
+        assert!(pid.config_mut().set_filter_tc(0.02).is_ok());
 
-        let mut state: f64 = 0.0;
-        let mut output: f64;
+        let mut state = [0.0, 0.0];
+        let mut control: f64;
+        let mut output: f64 = 0.0;
+
+        let mdl = MassSpringDamper {
+            natural_frequency: 2.0 * std::f64::consts::PI,
+            damping_ratio: 0.2,
+        };
+
+        const FIXED_STEP_SIZE_S: f64 = FIXED_STEP_SIZE_MS as f64 * 0.001;
 
         for i in 0..1000usize {
-            let timestamp = ctx.last_time().unwrap_or(Millis(0))
-                + Duration::from_millis(data::FIXED_STEP_SIZE_MS);
-            (output, ctx) = pid.compute(ctx, state, 1.0, timestamp, None);
+            let last_time = ctx.last_time().unwrap_or(Millis(0));
+            let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
+
+            let sine_signal = sine_signal(last_time, Millis(0));
+            (control, ctx) = pid.compute(ctx, output, sine_signal, timestamp, None);
             if i % 20 == 0 {
-                assert_relative_eq!(
-                    state,
-                    data::CL_STEP_RESPONSE_50MS[i / 20usize],
-                    epsilon = 1e-12
-                );
+                assert_relative_eq!(output, CL_SINE_RESPONSE_50MS[i / 20usize], epsilon = 1e-12);
             }
-            state = gain * output;
+            let deriv = mdl.eval(state, control);
+            state[0] += deriv[0] * FIXED_STEP_SIZE_S;
+            state[1] += deriv[1] * FIXED_STEP_SIZE_S;
+            output = state[0];
         }
     }
 }
@@ -721,7 +779,7 @@ mod test_stateful_pid {
 
         let mut expected: f64;
 
-        for i in 0..1000usize {
+        for _ in 0..1000usize {
             let last_time = ctx.last_time().unwrap_or(Millis(0));
             let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
 
@@ -731,6 +789,47 @@ mod test_stateful_pid {
             let result = stateful_pid.compute(0.0, sine_signal, timestamp, None);
 
             assert_eq!(result, expected);
+        }
+    }
+
+    /// This test builds upon `test_simulink_closed_loop_behavior_compliance` and ensures the
+    /// stateful PID controller behaves the same as the functional PID controller numerically
+    #[test]
+    fn test_forwarding_to_stateful_pid_closed_loop_numerical_equivalence() {
+        let (mut func_pid, mut ctx) = make_controller();
+
+        let mut stateful_pid = make_stateful_controller();
+
+        // Set non-default D-gain and filter time constant
+        assert!(func_pid.config_mut().set_kd(0.01).is_ok());
+        assert!(func_pid.config_mut().set_filter_tc(0.02).is_ok());
+        assert!(stateful_pid.config_mut().set_kd(0.01).is_ok());
+        assert!(stateful_pid.config_mut().set_filter_tc(0.02).is_ok());
+
+        let mut state = [0.0, 0.0];
+        let mut expected: f64;
+        let mut output: f64 = 0.0;
+
+        let mdl = MassSpringDamper {
+            natural_frequency: 2.0 * std::f64::consts::PI,
+            damping_ratio: 0.2,
+        };
+
+        const FIXED_STEP_SIZE_S: f64 = FIXED_STEP_SIZE_MS as f64 * 0.001;
+
+        for _ in 0..1000usize {
+            let last_time = ctx.last_time().unwrap_or(Millis(0));
+            let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
+
+            let sine_signal = sine_signal(last_time, Millis(0));
+            (expected, ctx) = func_pid.compute(ctx, output, sine_signal, timestamp, None);
+
+            let result = stateful_pid.compute(output, sine_signal, timestamp, None);
+            assert_eq!(result, expected);
+            let deriv = mdl.eval(state, expected);
+            state[0] += deriv[0] * FIXED_STEP_SIZE_S;
+            state[1] += deriv[1] * FIXED_STEP_SIZE_S;
+            output = state[0];
         }
     }
 }
