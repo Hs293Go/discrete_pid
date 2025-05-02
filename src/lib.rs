@@ -5,3 +5,6 @@ extern crate std;
 
 pub mod pid;
 pub mod time;
+
+#[cfg(feature = "simulation")]
+pub mod sim;
