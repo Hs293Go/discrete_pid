@@ -20,12 +20,12 @@
 
 mod data;
 
-use robust_pid::pid::{
+use discrete_pid::pid::{
     FuncPidController, IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError, PidContext,
     PidController,
 };
 
-use robust_pid::time::{InstantLike, Millis};
+use discrete_pid::time::{InstantLike, Millis};
 use std::time::Duration;
 
 mod test_pid {

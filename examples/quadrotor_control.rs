@@ -22,8 +22,8 @@
 
 #[cfg(feature = "simulation")]
 mod control {
+    use discrete_pid::{pid, time::Millis};
     use nalgebra as na;
-    use robust_pid::{pid, time::Millis};
 
     #[derive(Debug)]
     pub struct QuadrotorState {
@@ -244,8 +244,8 @@ mod control {
 #[cfg(feature = "simulation")]
 mod simulation {
     use control::*;
+    use discrete_pid::{pid, time};
     use nalgebra as na;
-    use robust_pid::{pid, time};
     use std::f64;
     use std::fs::{create_dir_all, File};
     use std::time::Duration;
