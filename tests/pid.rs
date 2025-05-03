@@ -646,8 +646,9 @@ mod test_pid_numerical_performance {
 
             let sine_signal = sine_signal(last_time, Millis(0));
             (output, ctx) = pid.compute(ctx, 0.0, sine_signal, timestamp, None);
-            if i % 20 == 0 {
-                assert_relative_eq!(output, OL_SINE_RESPONSE_50MS[i / 20usize], epsilon = 1e-12);
+            if i % DOWNSAMPLE_FACTOR == 0 {
+                let expected = OL_SINE_RESPONSE[i / DOWNSAMPLE_FACTOR];
+                assert_relative_eq!(output, expected, epsilon = 1e-12);
             }
         }
     }
@@ -698,8 +699,9 @@ mod test_pid_numerical_performance {
 
             let sine_signal = sine_signal(last_time, Millis(0));
             (control, ctx) = pid.compute(ctx, output, sine_signal, timestamp, None);
-            if i % 20 == 0 {
-                assert_relative_eq!(output, CL_SINE_RESPONSE_50MS[i / 20usize], epsilon = 1e-12);
+            if i % DOWNSAMPLE_FACTOR == 0 {
+                let expected = CL_SINE_RESPONSE[i / DOWNSAMPLE_FACTOR];
+                assert_relative_eq!(output, expected, epsilon = 1e-12);
             }
             let deriv = mdl.eval(state, control);
             state[0] += deriv[0] * FIXED_STEP_SIZE_S;
