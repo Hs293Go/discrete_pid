@@ -29,6 +29,8 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import pandas as pd
 
+plt.rcParams.update({"text.usetex": True, "font.family": "Times"})
+
 
 def plot(targets, output, output_dir):
     fig, ax = plt.subplots(1, 1, subplot_kw={"projection": "3d"})
@@ -52,24 +54,27 @@ def plot(targets, output, output_dir):
     plt.tight_layout()
     fig.savefig(output_dir / "quadrotor_trajectory.png", bbox_inches="tight")
 
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(8, 6))
+    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(8, 4))
 
-    fig.suptitle("Quadrotor Body Rate Control Performance")
+    fig.suptitle(
+        r"Quadrotor Body Rate $(\omega_x,\omega_y,\omega_z)$ Tracking under PID control",
+        fontsize=15,
+    )
 
     for comp, disp_comp, ax in zip("pqr", "xyz", axes[:, 0]):
-        ax.plot(output["time"], output[comp], label="State")
-        ax.plot(output["time"], output[comp + "d"], label="Setpoint")
-        ax.set_ylabel(rf"$\omega^{disp_comp}\ (s^{{-1}})$")
-        ax.legend()
+        ax.plot(output["time"], output[comp], "b", label="Measurement")
+        ax.plot(output["time"], output[comp + "d"], "--r", label="Setpoint")
+        ax.set_ylabel(rf"$\omega_{disp_comp}$ (rad/s)")
+        ax.legend(fontsize=10, loc="upper right")
     for comp, disp_comp, ax in zip("pqr", "xyz", axes[:, 1]):
         abs_error = (output[comp] - output[comp + "d"]).abs()
-        ax.plot(output["time"], abs_error, label="Error")
-        ax.set_ylabel(rf"$|\omega^{disp_comp}|\ (s^{{-1}})$")
+        ax.plot(output["time"], abs_error, "k", label="Error")
+        ax.set_ylabel(rf"$|\omega_{disp_comp}|$ (rad/s)")
         ax.set_ylim(0, 3)
-        ax.legend()
+        ax.legend(fontsize=10, loc="upper right")
 
-    fig.supxlabel("Time (s)")
-    fig.savefig(output_dir / "quadrotor_body_rate_control.png", bbox_inches="tight")
+    fig.supxlabel("Time (s)", fontsize=13)
+    fig.savefig(output_dir / "quadrotor_control.png")
 
 
 def animate(targets, output, output_dir, mode):
