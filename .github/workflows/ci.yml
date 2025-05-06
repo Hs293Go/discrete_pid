@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (std + no_std)
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - name: Default (std)
+            features: ""
+          - name: No-std
+            features: "--no-default-features --lib --bins --tests --examples"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Run tests - ${{ matrix.name }}
+        run: cargo test ${{ matrix.features }}
+
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustfmt
+        run: cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  docs:
+    name: Doc check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build docs
+        run: cargo doc --no-deps
