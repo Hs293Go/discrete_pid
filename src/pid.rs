@@ -193,7 +193,7 @@ impl<F: FloatCore> Default for PidConfig<F> {
             sample_time: Duration::from_millis(10),
             output_min: -F::infinity(),
             output_max: F::infinity(),
-            use_strict_causal_integrator: true,
+            use_strict_causal_integrator: false,
             use_derivative_on_measurement: false,
             smoothing_constant: F::from(0.5).unwrap(),
         }
@@ -784,12 +784,12 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
     /// If the activity level is set to `Inactive` from any other state, the integral term will be
     /// reset to zero.
     pub fn set_integrator_activity(&mut self, activity: IntegratorActivity) {
-        self.integrator_activity = activity;
-
         let is_active = self.integrator_activity != IntegratorActivity::Inactive;
         if is_active && activity == IntegratorActivity::Inactive {
             self.reset_integral();
         }
+
+        self.integrator_activity = activity;
     }
 }
 
@@ -863,7 +863,7 @@ impl<F: FloatCore> FuncPidController<F> {
         // If the PID controller is just switched active or has never been run before (last_time is
         // None), initialize the state then run the controller without checking if the sample time
         // has elapsed
-        if !ctx.is_initialized || ctx.last_time.is_none() {
+        if !ctx.is_initialized {
             ctx.last_time = Some(timestamp);
             ctx.last_input = input;
             ctx.last_err = error;

@@ -41,6 +41,7 @@ mod test_pid_numerical_performance {
         assert!(pid.config_mut().set_ki(20.0).is_ok());
         assert!(pid.config_mut().set_kd(1.0).is_ok());
         assert!(pid.config_mut().set_filter_tc(0.02).is_ok());
+        pid.config_mut().set_use_strict_causal_integrator(true);
     }
 
     /// To recreate these test results, create the following simulink model
@@ -63,6 +64,9 @@ mod test_pid_numerical_performance {
 
         // Set non-default D-gain and filter time constant
         configure_pid_nondefault(&mut pid);
+
+        // Simulink uses a strict causal integrator
+        assert!(pid.config().use_strict_causal_integrator());
 
         let mut output: f64;
 
@@ -108,6 +112,9 @@ mod test_pid_numerical_performance {
 
         // Set non-default D-gain and filter time constant
         configure_pid_nondefault(&mut pid);
+
+        // Simulink uses a strict causal integrator
+        assert!(pid.config().use_strict_causal_integrator());
 
         let mut state = na::vector![0.0, 0.0];
         let mut control: f64;

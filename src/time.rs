@@ -146,16 +146,28 @@ impl Add<Duration> for SecondsF64 {
     }
 }
 
-impl SecondsF64 {
-    /// Constructs a new TimeF64 from raw seconds.
-    pub fn from_secs(secs: f64) -> Self {
-        SecondsF64(secs)
-    }
+#[test]
+fn test_millis() {
+    let t0 = Millis(1000);
+    let t1 = t0 + Duration::from_millis(100);
+    assert_eq!(t1.duration_since(t0), Duration::from_millis(100));
+}
 
-    /// Returns the underlying seconds.
-    pub fn as_secs_f64(&self) -> f64 {
-        self.0
-    }
+#[test]
+fn test_micros() {
+    let t0 = Micros(1000);
+    let t1 = t0 + Duration::from_micros(100);
+    assert_eq!(t1.duration_since(t0), Duration::from_micros(100));
+}
+
+#[test]
+fn test_seconds_f64() {
+    let t0 = SecondsF64(1.0);
+    let t1 = t0 + Duration::from_secs_f64(1.0);
+    assert_eq!(t1.duration_since(t0), Duration::from_secs_f64(1.0));
+
+    let t2 = SecondsF64(0.5);
+    assert_eq!(t2.duration_since(t1), Duration::from_secs_f64(0.0));
 }
 
 #[cfg(feature = "std")]
@@ -183,19 +195,6 @@ mod std_instant {
         }
     }
 
-    #[cfg(feature = "std")]
-    impl PartialEq for StdInstant {
-        fn eq(&self, other: &Self) -> bool {
-            self.0 == other.0
-        }
-    }
-
-    #[cfg(feature = "std")]
-    impl From<std::time::Instant> for StdInstant {
-        fn from(value: std::time::Instant) -> Self {
-            StdInstant(value)
-        }
-    }
     /// Tests that StdInstant is just one constructor call away from std::time::Instant
     /// and calling duration_since is equivalent to calling the same method on the underlying Instant.
     #[cfg(all(test, feature = "std"))]
@@ -208,6 +207,10 @@ mod std_instant {
         let wrapped_end = StdInstant(end);
         let result = wrapped_end.duration_since(wrapped_start);
         let expected = end.duration_since(start);
+        assert_eq!(result, expected);
+
+        let summed_end = wrapped_start + expected;
+        let result = summed_end.duration_since(wrapped_start);
         assert_eq!(result, expected);
     }
 }
