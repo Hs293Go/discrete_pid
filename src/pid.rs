@@ -27,6 +27,103 @@ use num_traits::float::FloatCore;
 #[cfg(feature = "std")]
 use thiserror::Error;
 
+/// Error type for PID configuration errors.
+///
+/// This enum represents various errors that can occur when setting up or modifying the PID
+/// configuration. All of these errors are related to invalid values that break the invariants of the
+/// PID configuration.
+#[cfg_attr(feature = "std", derive(Error))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PidConfigError {
+    /// The proportional gain is non-positive or non-finite.
+    #[cfg_attr(
+        feature = "std",
+        error("Proportional gain is non-positive or non-finite")
+    )]
+    InvalidProportionalGain = 1,
+
+    /// The integral gain is negative or non-finite.
+    #[cfg_attr(feature = "std", error("Integral gain is negative or non-finite"))]
+    InvalidIntegralGain = 2,
+
+    /// The derivative gain is negative or non-finite.
+    #[cfg_attr(feature = "std", error("Derivative gain is negative or non-finite"))]
+    InvalidDerivativeGain = 3,
+
+    /// The filter time constant is non-positive or non-finite.
+    #[cfg_attr(
+        feature = "std",
+        error("Filter time constant is non-positive or non-finite")
+    )]
+    InvalidSampleTime = 4,
+
+    /// The output limits are flipped or not finite.
+    #[cfg_attr(feature = "std", error("Output limits are flipped or NAN"))]
+    InvalidOutputLimits = 5,
+
+    /// The filter time constant is non-positive or non-finite.
+    #[cfg_attr(
+        feature = "std",
+        error("Filter time constant is non-positive or non-finite")
+    )]
+    InvalidFilterTimeConstant = 6,
+}
+
+/// A container for the configuration of PID controllers.
+///
+/// The configuration parameters for a PID controller are:
+/// - Gain: proportional (`kp`), integral (`ki`), and derivative (`kd`)
+/// - Sample time (`sample_time`)
+/// - Output limits (`output_min`, `output_max`)
+/// - Flags that toggles strict causal integrator and derivative on measurement
+/// - Time constant for the low-pass filter on the derivative term
+///
+/// Modify the configuration using the provided setter methods in-place, or use
+/// [`PidConfigBuilder`] to create a fully-specified configuration.
+///
+/// Tune the PID controller on-the-fly by accessing its configuration through
+/// [`FuncPidController::config_mut`] or [`PidController::config_mut`], then calling the desired
+/// setters.
+///
+/// # Details
+///
+/// [`use_strict_causal_integrator`](PidConfig::use_strict_causal_integrator) is a flag that determines whether the integral term is updated
+/// before or after the output is computed. If set to true, the integral term is updated after the
+/// output is conmputed, such that the output strictly depends on information from the past.
+///
+/// [`use_derivative_on_measurement`](PidConfig::use_derivative_on_measurement) is a flag that determines whether the derivative term is
+/// computed by finite-differencing the **input/measurement** or **error**. If the setpoint is
+/// varying slowly but discontinuously (e.g. discrete waypoints/human control), derivative on error
+/// will introduce _derivative kick_ and cause the output to spike. In this case, it is better to
+/// use derivative on measurement. If the setpoint is varying rapid and/or continuously (e.g.
+/// computed by a path planner), derivative on measurement discards setpoint variation information
+/// and is **wrong**.
+///
+/// # Invariants
+///
+/// All parameters must not be NaN. The following invariants must be satisfied:
+///
+/// - `kp > 0`,  and `filter_tc > 0`; all finite
+/// - Neither `sample_time.is_zero()` nor `sample_time == Duration::MAX`
+/// - `ki >= 0` and `kd >= 0`; all finite
+/// - `output_min < output_max`
+///
+/// All setters return a [`Result`] containing a member in [`PidConfigError`] when encountering an
+/// invariant-breaking value.
+///
+/// # Example
+/// ```rust
+/// use discrete_pid::pid::{PidConfig, PidConfigError};
+/// use core::time::Duration;
+///
+/// let mut config = PidConfig::default();
+/// assert!(config.set_kp(2.0).is_ok());
+/// assert!(config.set_ki(-1.0) == Err(PidConfigError::InvalidIntegralGain));
+/// config.set_kd(0.1);
+/// config.set_sample_time(Duration::from_millis(20));
+/// config.set_output_limits(-10.0, 10.0);
+/// ```
 #[derive(Copy, Clone, Debug)]
 pub struct PidConfig<F: FloatCore> {
     /// Proportional gain coefficient.
@@ -74,6 +171,19 @@ pub struct PidConfig<F: FloatCore> {
 }
 
 impl<F: FloatCore> Default for PidConfig<F> {
+    /// Creates a new [`PidConfig`] instance with the following default values.
+    ///
+    /// | Parameter                     | Value     | Note                                                               |
+    /// |-------------------------------|-----------|--------------------------------------------------------------------|
+    /// | Proportional gain             | 1.0       |                                                                    |
+    /// | Integral gain                 | 0.01      | time-invariant gain: 1.0 when combined with the default sample time of 10ms |
+    /// | Derivative gain               | 0.0       | Disabled                                                           |
+    /// | Filter time constant          | 0.01      | in seconds                                                         |
+    /// | Sample time                   | 0.01      | in seconds                                                         |
+    /// | Output minimum                | -infinity | no limit                                                           |
+    /// | Output maximum                | +infinity | no limit                                                           |
+    /// | Use strict causal integrator  | true      |                                                                    |
+    /// | Use derivative on measurement | false     |                                                                    |
     fn default() -> Self {
         PidConfig {
             kp: F::one(),
@@ -90,54 +200,22 @@ impl<F: FloatCore> Default for PidConfig<F> {
     }
 }
 
-#[cfg_attr(feature = "std", derive(Error))]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PidConfigError {
-    #[cfg_attr(
-        feature = "std",
-        error("Proportional gain is non-positive or non-finite")
-    )]
-    InvalidProportionalGain = 1,
-
-    #[cfg_attr(feature = "std", error("Integral gain is negative or non-finite"))]
-    InvalidIntegralGain = 2,
-
-    #[cfg_attr(feature = "std", error("Derivative gain is negative or non-finite"))]
-    InvalidDerivativeGain = 3,
-
-    #[cfg_attr(
-        feature = "std",
-        error("Filter time constant is non-positive or non-finite")
-    )]
-    InvalidSampleTime = 4,
-
-    #[cfg_attr(feature = "std", error("Output limits are flipped or NAN"))]
-    InvalidOutputLimits = 5,
-
-    #[cfg_attr(
-        feature = "std",
-        error("Filter time constant is non-positive or non-finite")
-    )]
-    InvalidFilterTimeConstant = 6,
-}
-
 impl<F: FloatCore> PidConfig<F> {
     /// Returns the proportional gain.
     pub fn kp(&self) -> F {
         self.kp
     }
 
-    /// Returns the total integral gain.
-    /// This gain is the internal ki value, inversely scaled by the sample time to produce the value that the
-    /// user passes into set_ki
+    /// Returns the time-invariant integral gain.
+    /// This is computed by inversely scaling the internal `ki` by the sample time; It would give
+    /// the value that you last passed into [`set_ki`](Self::set_ki())
     pub fn ki(&self) -> F {
         self.ki / F::from(self.sample_time.as_secs_f64()).unwrap()
     }
 
-    /// Returns the total derivative gain.
-    /// This gain is the internal kd value, scaled by the sample time to produce the value that the
-    /// user passes into set_kd
+    /// Returns the time-invariant derivative gain.
+    /// This is computed by inversely scaling the internal `kd` by the sample time; It would give
+    /// the value that you last passed into [`set_kd`](Self::set_kd)
     pub fn kd(&self) -> F {
         self.kd * F::from(self.sample_time.as_secs_f64()).unwrap()
     }
@@ -162,12 +240,16 @@ impl<F: FloatCore> PidConfig<F> {
         self.output_max
     }
 
-    /// Returns the flag indicating whether to use a strict causal integrator.
+    /// Returns the flag indicating whether to use a strict causal integrator. See
+    /// [Details](crate::pid::PidConfig#details) for more information on the semantics of this
+    /// flag.
     pub fn use_strict_causal_integrator(&self) -> bool {
         self.use_strict_causal_integrator
     }
 
-    /// Returns the flag indicating whether to apply the derivative on the measurement.
+    /// Returns the flag indicating whether to apply the derivative on the measurement. See
+    /// [Details](crate::pid::PidConfig#details) for more information on the semantics of this
+    /// flag.
     pub fn use_derivative_on_measurement(&self) -> bool {
         self.use_derivative_on_measurement
     }
@@ -216,15 +298,15 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the proportional gain.
     ///
-    /// The proportional gain must be greater than zero. If the user intends to disable the PID
-    /// controller, they should set the activity level to `Inactive` instead.
+    /// `kp` must be greater than zero. If you intend to disable the PID controller, call
+    /// [`PidContext::deactivate`] instead.
     ///
     /// # Arguments
-    /// - `kp`: The new proportional gain.
+    /// - `kp`: Proportional gain.
     ///
     /// # Returns
     /// - `Ok(())` if the gain was set successfully.
-    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than or equal to zero or not finite.
+    /// - `Err(PidConfigError::InvalidProportionalGain)` if `kp <= 0` or not finite.
     pub fn set_kp(&mut self, kp: F) -> Result<(), PidConfigError> {
         Self::check_kp(kp)?;
         self.kp = kp;
@@ -233,15 +315,17 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the integral gain.
     ///
-    /// The user passes in a 'total' integral gain, which is scaled by the sample time to produce
-    /// the actual ki value used in the PID algorithm.
+    /// `ki` must not be negative; You can set `ki` to 0 to disable the derivative term.
+    ///
+    /// You pass in a time-invariant `ki`, which is scaled by the sample time to produce the
+    /// internal ki value.
     ///
     /// # Arguments
-    /// - `ki`: The new integral gain.
+    /// - `ki`: Integral gain.
     ///
     /// # Returns
     /// - `Ok(())` if the gain was set successfully.
-    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than zero or not finite.
+    /// - `Err(PidConfigError::InvalidIntegralGain)` if `ki < 0` or not finite.
     pub fn set_ki(&mut self, ki: F) -> Result<(), PidConfigError> {
         Self::check_ki(ki)?;
         self.ki = ki * F::from(self.sample_time.as_secs_f64()).unwrap();
@@ -250,15 +334,17 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the derivative gain.
     ///
-    /// The user passes in a 'total' derivative gain, which is scaled inversely by the sample time to produce
-    /// the actual kd value used in the PID algorithm.
+    /// `kd` must not be negative; You can set `kd` to 0 to disable the derivative term.
+    ///
+    /// You pass in a time-invariant `kd`, which is scaled inversely by the sample time to produce
+    /// the internal kd value
     ///
     /// # Arguments
-    /// - `kd`: The new derivative gain.
+    /// - `kd`: Derivative gain.
     ///
     /// # Returns
     /// - `Ok(())` if the gain was set successfully.
-    /// - `Err(PidConfigError::InvalidGain)` if the gain is less than zero or not finite.
+    /// - `Err(PidConfigError::InvalidDerivativeGain)` if `kd < 0` or not finite.
     pub fn set_kd(&mut self, kd: F) -> Result<(), PidConfigError> {
         Self::check_kd(kd)?;
         self.kd = kd / F::from(self.sample_time.as_secs_f64()).unwrap();
@@ -267,12 +353,14 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the time constant for the low-pass filter applied to the derivative term.
     ///
+    /// `filter_tc` must be greater than zero and finite.
+    ///
     /// # Arguments
-    /// - `filter_tc`: The new time constant for the filter.
+    /// - `filter_tc`: Time constant for the filter.
     ///
     /// # Returns
     /// - `Ok(())` if the time constant was set successfully.
-    /// - `Err(PidConfigError::InvalidFilterTimeConstant)` if the time constant is less than or equal to zero or non finite.
+    /// - `Err(PidConfigError::InvalidFilterTimeConstant)` if `filter_tc <= 0` or not finite.
     pub fn set_filter_tc(&mut self, filter_tc: F) -> Result<(), PidConfigError> {
         Self::check_filter_tc(filter_tc)?;
         let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
@@ -284,12 +372,14 @@ impl<F: FloatCore> PidConfig<F> {
     /// Sets the sample time for the PID controller. Rescales the integral and derivative gains and
     /// the filter for the derivative term to maintain consistent behavior.
     ///
+    /// `sample_time` must not be the zero duration or the max duration.
+    ///
     /// # Arguments
-    /// - `sample_time`: The new sample time.
+    /// - `sample_time`: Sample time.
     ///
     /// # Returns
     /// - `Ok(())` if the sample time was set successfully.
-    /// - `Err(PidConfigError::InvalidSampleTime)` if the sample time is zero or max
+    /// - `Err(PidConfigError::InvalidSampleTime)` if `sample_time.is_zero()` or `sample_time == Duration::MAX`.
     pub fn set_sample_time(&mut self, sample_time: Duration) -> Result<(), PidConfigError> {
         Self::check_sample_time(sample_time)?;
 
@@ -307,7 +397,7 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the minimum and maximum output limits for the PID controller.
     ///
-    /// These limits may be set to infinity to disable clamping.
+    /// You may set these limits to infinity to disable clamping.
     ///
     /// # Arguments
     /// - `output_min`: The minimum output limit.
@@ -315,8 +405,8 @@ impl<F: FloatCore> PidConfig<F> {
     ///
     /// # Returns
     /// - `Ok(())` if the limits were set successfully.
-    /// - `Err(PidConfigError::InvalidOutputLimits)` if the minimum limit is greater than or equal to the maximum limit, or either
-    ///   limit is not finite.
+    /// - `Err(PidConfigError::InvalidOutputLimits)` if `output_min >= output_max` or if either
+    ///   limit is NaN.
     pub fn set_output_limits(
         &mut self,
         output_min: F,
@@ -331,16 +421,56 @@ impl<F: FloatCore> PidConfig<F> {
     }
 
     /// Sets whether to use a strict causal integrator.
+    /// See [Details](crate::pid::PidConfig#details) for more information on the semantics of this
+    /// flag.
+    ///
+    /// # Arguments
+    /// - `use_strict_causal_integrator`: Whether to use a strict causal integrator.
     pub fn set_use_strict_causal_integrator(&mut self, use_strict_causal_integrator: bool) {
         self.use_strict_causal_integrator = use_strict_causal_integrator;
     }
 
     /// Sets whether to apply the derivative on the measurement.
+    /// See [Details](crate::pid::PidConfig#details) for more information on the semantics of this
+    /// flag.
+    ///
+    /// # Arguments
+    /// - `use_derivative_on_measurement`: Whether to apply the derivative on the measurement.
     pub fn set_use_derivative_on_measurement(&mut self, use_derivative_on_measurement: bool) {
         self.use_derivative_on_measurement = use_derivative_on_measurement;
     }
 }
 
+/// A builder for fine-grained construction of `PidConfig` instances.
+///
+/// This struct provides a convenient way to create a `PidConfig` instance while configuring some
+/// desired parameters, leaving the rest at their default values. Note that the configured
+/// parameter values are validated when the `build` method is called, and an error is returned if
+/// any of the values are invalid.
+///
+/// This builder allows the PID configuration to be fully specified at construction time and left
+/// immutable afterwards. Combined with the `FuncPidController` implementation, this allows for a
+/// immutable PID controller that can be used in a functional style, giving perfectly reproducible
+/// control outputs.
+///
+/// # Example
+///
+/// ```rust
+/// use discrete_pid::pid::{PidConfigBuilder, PidConfig};
+/// use core::time::Duration;
+///
+/// let pid_config = PidConfigBuilder::default()
+///     .kp(2.0)
+///     .ki(0.5)
+///     .kd(0.1)
+///     .filter_tc(0.01)
+///     .sample_time(Duration::from_millis(20))
+///     .output_limits(-10.0, 10.0)
+///     .use_strict_causal_integrator(true)
+///     .use_derivative_on_measurement(false)
+///     .build()
+///     .expect("Failed to build PID config; Exiting application");
+/// ```
 #[derive(Debug)]
 pub struct PidConfigBuilder<F: FloatCore> {
     kp: F,
@@ -355,6 +485,8 @@ pub struct PidConfigBuilder<F: FloatCore> {
 }
 
 impl<F: FloatCore> Default for PidConfigBuilder<F> {
+    /// Creates a new `PidConfigBuilder` instance with default values identical to those from
+    /// [`PidConfig::default()`].
     fn default() -> Self {
         Self {
             kp: F::one(),
@@ -371,65 +503,94 @@ impl<F: FloatCore> Default for PidConfigBuilder<F> {
 }
 
 impl<F: FloatCore> PidConfigBuilder<F> {
-    /// Configures the proportional gain of the PID controller to be built.
+    /// Configures the proportional gain of the [`PidConfig`] to be built. No validation is performed
+    /// until [`build`](Self::build) is called.
     ///
     /// # Arguments
-    /// - `kp`: The new proportional gain.
+    /// - `kp`: Proportional gain.
     pub fn kp(mut self, kp: F) -> Self {
         self.kp = kp;
         self
     }
 
-    /// Configures the integral gain of the PID controller to be built.
+    /// Configures the integral gain of the [`PidConfig`] to be built. No validation is performed
+    /// until [`build`](Self::build) is called.
     ///
-    /// The user passes in a 'total' integral gain, which is scaled by the sample time to produce
-    /// the actual ki value used in the PID algorithm.
+    /// You pass in a time-invariant `ki`, which is scaled by the sample time to produce
+    /// the internal `ki` value
     ///
     /// # Arguments
-    /// - `ki`: The new integral gain.
+    /// - `ki`: Integral gain.
     pub fn ki(mut self, total_ki: F) -> Self {
         self.total_ki = total_ki;
         self
     }
 
-    /// Configures the derivative gain of the PID controller to be built.
+    /// Configures the derivative gain of the [`PidConfig`] to be built. No validation is performed
+    /// until [`build`](Self::build) is called.
     ///
-    /// The user passes in a 'total' derivative gain, which is scaled inversely by the sample time to produce
-    /// the actual kd value used in the PID algorithm.
+    /// You pass in a time-invariant `kd`, which is scaled inversely by the sample time to produce
+    /// the internal `kd` value
     ///
     /// # Arguments
-    /// - `kd`: The new derivative gain.
+    /// - `kd`: Derivative gain.
     pub fn kd(mut self, total_kd: F) -> Self {
         self.total_kd = total_kd;
         self
     }
 
+    /// Configures the time constant for the low-pass filter applied to the derivative term of the
+    /// [`PidConfig`] to be built. No validation is performed until [`build`](Self::build) is
+    /// called.
+    ///
+    /// # Arguments
+    /// - `filter_tc`: Time constant for the filter.
     pub fn filter_tc(mut self, filter_tc: F) -> Self {
         self.filter_tc = filter_tc;
         self
     }
 
+    /// Configures the sample time for the [`PidConfig`] to be built. No validation is performed
+    /// until [`build`](Self::build) is called.
+    ///
+    /// # Arguments
+    /// - `sample_time`: Sample time.
     pub fn sample_time(mut self, sample_time: Duration) -> Self {
         self.sample_time = sample_time;
         self
     }
 
+    /// Configures the output limits for the [`PidConfig`] to be built. No validation is performed
+    /// until [`build`](Self::build) is called.
+    ///
+    /// # Arguments
+    /// - `min`: Minimum output limit.
+    /// - `max`: Maximum output limit.
     pub fn output_limits(mut self, min: F, max: F) -> Self {
         self.output_min = min;
         self.output_max = max;
         self
     }
 
+    /// Configures whether to use a strict causal integrator for the [`PidConfig`] to be built.
     pub fn use_strict_causal_integrator(mut self, enabled: bool) -> Self {
         self.use_strict_causal_integrator = enabled;
         self
     }
 
+    /// Configures whether to apply the derivative on the measurement for the [`PidConfig`] to be
+    /// built.
     pub fn use_derivative_on_measurement(mut self, enabled: bool) -> Self {
         self.use_derivative_on_measurement = enabled;
         self
     }
 
+    /// Builds a new `PidConfig` instance after validating the configured parameters.
+    ///
+    /// # Returns
+    /// - `Ok(PidConfig<F>)` if the configuration is valid.
+    /// - `Err(PidConfigError)` if any of the configured parameters is invalid. Refer to the
+    ///   section [Invariants](PidConfig#Invariants) for details.
     pub fn build(self) -> Result<PidConfig<F>, PidConfigError> {
         PidConfig::check_kp(self.kp)?;
         PidConfig::check_ki(self.total_ki)?;
@@ -456,13 +617,44 @@ impl<F: FloatCore> PidConfigBuilder<F> {
     }
 }
 
+/// The activity level of the PID controller's integrator.
+///
+/// # Details
+/// During PID operation, the integrator could be paused, or disabled entirely. Pausing the
+/// integrator is useful when the integrator has already accumulated a useful amount of error
+/// enough to eliminate the steady state error but the system is entering a regime where noisy
+/// sensor feedback or rapid setpoint changes could cause the integrator to accumulate unwanted
+/// error.
+///
+/// # Example
+///
+/// In an autopilot application, you could set integrator activity to
+///
+/// - [`Inactive`](crate::pid::IntegratorActivity::Inactive) when the aircraft not under autopilot control at all
+/// - [`HoldIntegration`](crate::pid::IntegratorActivity::HoldIntegration) when the aircraft is
+///   under autopilot control but below an altitude threshold (ground effect causes strong
+///   disturbances present in that region only)
+/// - [`Active`](IntegratorActivity::Active) when the aircraft is under autopilot control and above the altitude threshold
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum IntegratorActivity {
+    /// The integrator is disabled and the i-term set to zero
     Inactive,
+
+    /// The integrator is paused and the i-term is held at the last value
     HoldIntegration,
+
+    /// The integrator is active and the i-term is updated
     Active,
 }
 
+/// A container for mutable state and runtime parameters of PID controllers.
+///
+/// This struct is used to store the internal state of the PID controller. You can query various
+/// useful information from this struct, such as he [`last_time`](PidContext::last_time) a PID
+/// computation was performed and the [`output`](PidContext::output) and
+/// [`error`](PidContext::error) at that time. Furthermore, you can manage PID runtime behavior
+/// such as [`activate`](PidContext::activate)-ing the PID, resetting the integral term, and pausing/resuming the
+/// integrator by calling appropriate methods on this struct.
 #[derive(Copy, Clone, Debug)]
 pub struct PidContext<T: InstantLike, F: FloatCore> {
     /// The integral term of the PID controller. This accumulates the error multiplied by the I
@@ -511,13 +703,14 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
         Default::default()
     }
 
-    /// Creates a new PID context with the given timestamp, input, and output values. This
-    /// initialization ensures smooth continuity of the PID controller's output under the following
-    /// assumptions:
+    /// Creates a new PID context initialized to the given timestamp, input, and output values.
+    /// This initialization ensures smooth continuity of the PID controller's output under the
+    /// following assumptions:
     ///
     /// * The input (process value) is at a steady state (or minimally changing)
-    /// * There is no error at the time of initialization, such that the output is purely
-    ///   contributed by the integral term
+    /// * There is no transient error at the time of initialization, such that the output is purely
+    ///   contributed by the integral term, which could be steady-state error or externally
+    ///   measured disturbance
     ///
     /// # Arguments
     /// - `timestamp`: The timestamp of the initialization.
@@ -616,39 +809,43 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
     }
 }
 
-/// A functional implementation of a PID (Proportional-Integral-Derivative) controller.
-///
-/// This struct represents a PID controller, which computes the control output based proportional,
-/// integral, and derivative terms based on the error between a setpoint and a process variable.
-/// This implementation is stateless so a context object must be passed in and returned with each
-/// call to `compute`.
+/// A functional PID controller.
 pub struct FuncPidController<F: FloatCore> {
     config: PidConfig<F>,
 }
 
-/// A stateful implementation of a PID (Proportional-Integral-Derivative) controller.
-///
-/// This struct represents a PID controller, which computes the control output based proportional,
-/// integral, and derivative terms based on the error between a setpoint and a process variable.
-/// This implementation maintains its own state, so it can be used without passing a context object.
-pub struct PidController<T: InstantLike, F: FloatCore> {
-    ctx: PidContext<T, F>,
-    controller: FuncPidController<F>,
-}
-
 impl<F: FloatCore> FuncPidController<F> {
+    /// Creates a new `FuncPidController` instance with the given configuration.
+    ///
+    /// # Arguments
+    /// - `config`: The PID configuration.
     pub fn new(config: PidConfig<F>) -> Self {
         FuncPidController { config }
     }
 
+    /// Returns the PID configuration.
     pub fn config(&self) -> &PidConfig<F> {
         &self.config
     }
 
+    /// Returns a mutable reference to the PID configuration. This allows you to modify the
+    /// configuration and tune the PID controller on-the-fly
     pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.config
     }
 
+    /// Computes the PID control output based on the given input, setpoint, and timestamp, and
+    /// optionally a feedforward term.
+    ///
+    /// # Arguments
+    /// - `ctx`: The PID context containing the current state of the controller.
+    /// - `input`: The current process variable (PV) or input value.
+    /// - `setpoint`: The desired setpoint or target value.
+    /// - `timestamp`: The current timestamp.
+    /// - `feedforward`: An optional feedforward term to be added to the output.
+    ///
+    /// # Returns
+    /// - A tuple containing the computed output and the updated PID context.
     pub fn compute<T: InstantLike>(
         &self,
         mut ctx: PidContext<T, F>,
@@ -739,7 +936,15 @@ impl<F: FloatCore> FuncPidController<F> {
     }
 }
 
+/// A stateful PID controller.
+pub struct PidController<T: InstantLike, F: FloatCore> {
+    ctx: PidContext<T, F>,
+    controller: FuncPidController<F>,
+}
+
 impl<T: InstantLike, F: FloatCore> PidController<T, F> {
+    /// Creates a new PID controller with the given configuration without initializing the context,
+    /// effectively setting the internal context to [`PidContext::new_uninit`].
     pub fn new_uninit(config: PidConfig<F>) -> Self {
         let controller = FuncPidController::new(config);
         Self {
@@ -748,6 +953,8 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
     }
 
+    /// Creates a new PID controller with the given configuration and initializes the context by
+    /// forwarding arguments to [`PidContext::new`].
     pub fn new(config: PidConfig<F>, timestamp: T, input: F, output: F) -> Self {
         let controller = FuncPidController::new(config);
         Self {
@@ -756,14 +963,28 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
     }
 
+    /// Returns the PID configuration.
     pub fn config(&self) -> &PidConfig<F> {
         &self.controller.config
     }
 
+    /// Returns a mutable reference to the PID configuration. This allows you to modify the
+    /// configuration and tune the PID controller on-the-fly
     pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.controller.config
     }
 
+    /// Computes the PID control output based on the given input, setpoint, and timestamp, and
+    /// optionally a feedforward term.
+    ///
+    /// # Arguments
+    /// - `input`: The current process variable (PV) or input value.
+    /// - `setpoint`: The desired setpoint or target value.
+    /// - `timestamp`: The current timestamp.
+    /// - `feedforward`: An optional feedforward term to be added to the output.
+    ///
+    /// # Returns
+    /// - The computed output of the PID controller.
     pub fn compute(&mut self, input: F, setpoint: F, timestamp: T, feedforward: Option<F>) -> F {
         let (output, ctx) =
             self.controller

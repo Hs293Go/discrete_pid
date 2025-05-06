@@ -22,31 +22,72 @@
 use core::ops::Add;
 use core::time::Duration;
 
-use core::any::Any;
-use core::fmt::Debug;
-
-/// A trait for time-like objects that can be used to measure elapsed time.
-/// The PID controller uses this trait to measure elapsed time and compare it to the sample time,
-/// triggering computation only if the elapsed time is greater than the sample time.
-pub trait InstantLike:
-    Sized
-    + Add<Duration, Output = Self>
-    + Clone
-    + Copy
-    + Debug
-    + PartialEq<Self>
-    + Send
-    + Sync
-    + Unpin
-    + Any
-{
+/// A trait for types that represent a instant in time for the PID controllers.
+///
+/// This trait enables generic, `no_std`-friendly support for timekeeping in PID controllers, where
+/// [`compute`](crate::pid::FuncPidController::compute) does work only after a sample time interval has passed.
+///
+/// For convenience, the library provides several implementations of `InstantLike`:
+/// - [`Millis`](struct.Millis.html): Represents time in milliseconds.
+/// - [`Micros`](struct.Micros.html): Represents time in microseconds.
+/// - [`SecondsF64`](struct.SecondsF64.html): Represents time in seconds as a 64-bit float.
+/// - [`StdInstant`](struct.StdInstant.html): A wrapper around `std::time::Instant` (only available with the `std` feature).
+///
+/// ## Example
+///
+/// ### Implementating your own `InstantLike` type
+///
+/// You can define your own `InstantLike` types to interoperate with the PID controller:
+///
+/// ```rust
+/// use discrete_pid::time::InstantLike;
+/// use core::time::Duration;
+///
+/// #[derive(Copy, Clone)]
+/// struct Time {
+///   sec: i32,
+///   nsec: i32,
+/// }
+///
+/// impl InstantLike for Time {
+///   fn duration_since(&self, other: Self) -> Duration {
+///     let sec = self.sec - other.sec;
+///     let nsec = self.nsec - other.nsec;
+///     Duration::new(sec as u64, nsec as u32)
+///   }
+/// }
+/// ```
+///
+/// ### Using a predefined `InstantLike` type
+///
+/// This example demonstrates how a conforming type can be seamlessly used with the PID controller
+/// by letting the compiler infer the type of the `InstantLike` parameter.
+///
+/// ```rust
+/// use core::time::Duration;
+/// use discrete_pid::time::{InstantLike, Millis};
+/// use discrete_pid::pid::{PidConfig, PidController};
+///
+/// let t0 = Millis(1000);
+/// let t1 = Millis(1100);
+///
+/// assert_eq!(t1.duration_since(t0), Duration::from_millis(100));
+///
+/// let mut pid = PidController::new_uninit(PidConfig::default());
+/// let output = pid.compute(0.0, 1.0, t1, None);
+///
+/// ```
+///
+/// ## See Also
+///
+/// - [`Duration`](https://doc.rust-lang.org/core/time/struct.Duration.html)
+pub trait InstantLike: Copy {
     /// Returns the amount of time elapsed from another instant to this one
     #[must_use]
     fn duration_since(&self, earlier: Self) -> Duration;
 }
 
 /// A wrapper around an unsigned 64-bit integer representing milliseconds
-/// You would wrap th
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Millis(pub u64);
 
@@ -64,6 +105,7 @@ impl Add<Duration> for Millis {
     }
 }
 
+/// A wrapper around an unsigned 64-bit integer representing microseconds
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Micros(pub u64);
 
@@ -81,10 +123,11 @@ impl Add<Duration> for Micros {
     }
 }
 
+/// A wrapper around an 64-bit float representing seconds
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct TimeF64(pub f64); // seconds since an arbitrary epoch
+pub struct SecondsF64(pub f64); // seconds since an arbitrary epoch
 
-impl InstantLike for TimeF64 {
+impl InstantLike for SecondsF64 {
     fn duration_since(&self, earlier: Self) -> Duration {
         let secs = self.0 - earlier.0;
         if secs < 0.0 {
@@ -95,18 +138,18 @@ impl InstantLike for TimeF64 {
     }
 }
 
-impl Add<Duration> for TimeF64 {
+impl Add<Duration> for SecondsF64 {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        TimeF64(self.0 + rhs.as_secs_f64())
+        SecondsF64(self.0 + rhs.as_secs_f64())
     }
 }
 
-impl TimeF64 {
+impl SecondsF64 {
     /// Constructs a new TimeF64 from raw seconds.
     pub fn from_secs(secs: f64) -> Self {
-        TimeF64(secs)
+        SecondsF64(secs)
     }
 
     /// Returns the underlying seconds.
@@ -115,20 +158,14 @@ impl TimeF64 {
     }
 }
 
-/// A convenient wrapper around `std::time::Instant` satisfying the `InstantLike` trait.
 #[cfg(feature = "std")]
 mod std_instant {
 
     use super::{Add, Duration, InstantLike};
 
+    /// A wrapper around `std::time::Instant` satisfying the `InstantLike` trait.
     #[derive(Debug, Clone, Copy)]
     pub struct StdInstant(pub std::time::Instant);
-
-    impl StdInstant {
-        pub fn now() -> Self {
-            StdInstant(std::time::Instant::now())
-        }
-    }
 
     #[cfg(feature = "std")]
     impl InstantLike for StdInstant {
@@ -153,15 +190,24 @@ mod std_instant {
         }
     }
 
+    #[cfg(feature = "std")]
+    impl From<std::time::Instant> for StdInstant {
+        fn from(value: std::time::Instant) -> Self {
+            StdInstant(value)
+        }
+    }
     /// Tests that StdInstant is just one constructor call away from std::time::Instant
     /// and calling duration_since is equivalent to calling the same method on the underlying Instant.
     #[cfg(all(test, feature = "std"))]
     #[test]
     fn test_std_instant_wrapper() {
-        let start = StdInstant::now();
-        let end = StdInstant(std::time::Instant::now());
-        let result = end.duration_since(start);
-        let expected = end.0.duration_since(start.0);
+        let start = std::time::Instant::now();
+        let end = std::time::Instant::now();
+
+        let wrapped_start = StdInstant(start);
+        let wrapped_end = StdInstant(end);
+        let result = wrapped_end.duration_since(wrapped_start);
+        let expected = end.duration_since(start);
         assert_eq!(result, expected);
     }
 }
