@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/rust-stable-blue.svg)](https://www.rust-lang.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![CI](https://github.com/Hs293Go/discrete_pid/actions/workflows/ci.yml/badge.svg)](https://github.com/Hs293Go/discrete_pid/actions)
-
+[![codecov](https://codecov.io/gh/Hs293Go/discrete_pid/refs/head/main/graph/badge.svg)](https://codecov.io/gh/Hs293Go/discrete_pid)
 A correctness-first discrete PID controller for embedded and real-time
 applications.
 
