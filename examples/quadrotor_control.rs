@@ -87,7 +87,10 @@ mod control {
             motor_speeds_cmd: na::Vector4<f64>,
             dt: f64,
         ) -> QuadrotorState {
-            let f = |x: na::SVector<f64, 17>| -> na::SVector<f64, 17> {
+            // Implement the time-derivative of Euclidean quantities in the quadrotor dynamics
+            // equation; i.e. The quaternion dynamics is not updated here
+            #[allow(clippy::toplevel_ref_arg)]
+            let f = |x: na::SVector<f64, 13>| -> na::SVector<f64, 13> {
                 let motor_thrusts =
                     motor_speeds_cmd.component_mul(&motor_speeds_cmd) * self.thrust_constant;
                 let thrust_torque = self.allocation_matrix() * motor_thrusts;
@@ -95,42 +98,35 @@ mod control {
                 let collective_thrust = thrust_torque[0] / self.mass;
                 let torque = thrust_torque.fixed_rows::<3>(1);
 
-                let velocity = x.fixed_rows::<3>(7);
-                let body_rate = x.fixed_rows::<3>(10);
-                let motor_speeds = x.fixed_rows::<4>(13);
+                let velocity = x.fixed_rows::<3>(3);
+                let body_rate = x.fixed_rows::<3>(6);
+                let motor_speeds = x.fixed_rows::<4>(9);
 
-                let mut dx = na::SVector::<f64, 17>::zeros();
-                dx.fixed_rows_mut::<3>(0).copy_from(&velocity);
-                // Do not update orientation through RK4
-                dx.fixed_rows_mut::<3>(7).copy_from(
-                    &(collective_thrust * qs.orientation.transform_vector(&na::Vector3::z())
-                        - na::Vector3::z() * 9.81),
-                );
-                dx.fixed_rows_mut::<3>(10).copy_from(
-                    &(self.inertia_inv * (torque - body_rate.cross(&(self.inertia * body_rate)))),
-                );
-                dx.fixed_rows_mut::<4>(13)
-                    .copy_from(&((motor_speeds_cmd - motor_speeds) / self.motor_time_constant));
-                dx
+                na::stack![velocity;
+                    collective_thrust * qs.orientation.transform_vector(&na::Vector3::z()) - na::Vector3::z() * 9.81;
+                    self.inertia_inv * (torque - body_rate.cross(&(self.inertia * body_rate)));
+                    (motor_speeds_cmd - motor_speeds) / self.motor_time_constant
+                ]
             };
-            // Update position and orientation
 
-            // First order Euler integration only, since a first-order geometric integrator on S3
-            // is used to update the orientation
-
+            // Update the Euclidean quantities in the quadrotor dynamics equation with a RK4
+            // integrator
             #[allow(clippy::toplevel_ref_arg)]
-            let x0 = na::stack![qs.position; qs.orientation.as_vector(); qs.velocity; qs.body_rate; qs.motor_speeds];
+            let x0 = na::stack![qs.position; qs.velocity; qs.body_rate; qs.motor_speeds];
             let k1 = f(x0);
             let k2 = f(x0 + dt * k1 / 2.0);
             let k3 = f(x0 + dt * k2 / 2.0);
             let k4 = f(x0 + dt * k3);
             let x = x0 + dt * ((k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0);
-            let updated_body_rate = &x.fixed_rows::<3>(10);
             qs.position.copy_from(&x.fixed_rows::<3>(0));
+            let updated_body_rate = x.fixed_rows::<3>(6);
+
+            // Specifically update the quaternion by converting the body rates (as angle-axis) to a
+            // quaternion increment then multiplying it with the current orientation
             qs.orientation *= na::UnitQuaternion::from_scaled_axis(updated_body_rate * dt);
-            qs.velocity.copy_from(&x.fixed_rows::<3>(7));
-            qs.body_rate.copy_from(updated_body_rate);
-            qs.motor_speeds.copy_from(&x.fixed_rows::<4>(13));
+            qs.velocity.copy_from(&x.fixed_rows::<3>(3));
+            qs.body_rate.copy_from(&updated_body_rate);
+            qs.motor_speeds.copy_from(&x.fixed_rows::<4>(9));
             qs
         }
     }
@@ -148,6 +144,7 @@ mod control {
     /// Geometric tracking controller. This is copied verbatim from
     /// Mellinger and Kumar's "Minimum Snap Trajectory Generation and Control for Quadrotors"
     impl GeometricController {
+        /// The vee-map converts a skew-symmetric matrix to a vector
         fn vee(mat: na::Matrix3<f64>) -> na::Vector3<f64> {
             na::Vector3::new(mat[(2, 1)], mat[(0, 2)], mat[(1, 0)])
         }
@@ -160,7 +157,7 @@ mod control {
             yaw: f64,
         ) -> (f64, na::Vector3<f64>) {
             // Position control law --- essentially PD control on position
-            // TODO: Readers may consider applying our robust PID controller here
+            // TODO: Readers may consider applying our PID controller here
             let e_p = quad_state.position - setpoint.position;
             let e_v = quad_state.velocity - setpoint.velocity;
             let f_des = -self.k_position.component_mul(&e_p) - self.k_velocity.component_mul(&e_v)
@@ -186,6 +183,7 @@ mod control {
             let angle_error = Self::vee(rd.transpose() * r - r.transpose() * rd) / 2.0;
             let rate_error = quad_state.body_rate - setpoint.body_rate;
 
+            // TODO: Readers may consider applying our robust PID controller here
             let rate_setpoint =
                 -self.k_angle.component_mul(&angle_error) - self.k_rate.component_mul(&rate_error);
             (collective_thrust_setpoint, rate_setpoint)
@@ -295,6 +293,13 @@ mod simulation {
     }
 
     use super::*;
+
+    // For simplicity, we let the quadrotor navigate to sparsely spaced discrete waypoints. This
+    // results in relatively jumpy trajectories --- when the quadrotor reaches a waypoint and its
+    // setpoint jumps to the next waypoint, the quadrotor is liable to 'jump up' as a sudden large
+    // thrust is commanded by the position control segment, but the quadrotor hasn't rotated soon
+    // enough to deliver that thrust in the right direction.
+    // TODO: Readers may consider implementing the minimum-snap trajectory generation algorithm
     const INITIAL_POSITION: na::Vector3<f64> = na::vector![0.0, 0.0, 1.0];
     const TARGET_POSITIONS: [na::Vector3<f64>; 4] = [
         na::vector![5.0, 0.0, 1.0],
@@ -324,8 +329,8 @@ mod simulation {
         rate_controller: RateController,
     ) -> SimOut {
         let mut rate_control_ctx = RateControllerContext::new();
-        const STEP_SIZE: f64 = 0.01;
-        const SIM_STEPS_PER_CONTROL_STEP: i32 = 10;
+        const STEP_SIZE: f64 = 0.01; // Just use the default PID step size
+        const SIM_STEPS_PER_CONTROL_STEP: i32 = 10; // Update the dynamics at 10x the control rate
         const SIM_STEP_SIZE: f64 = STEP_SIZE / SIM_STEPS_PER_CONTROL_STEP as f64;
 
         let mut torque_setpoint: na::Vector3<f64>;
@@ -346,6 +351,9 @@ mod simulation {
             body_rate: vec![na::Vector3::zeros()],
         };
 
+        // TODO: Readers may run this simulation with separate threads for the quadrotor simulators
+        // and inner/outer loop controllers. This is a good opportunity to demonstrate how easily
+        // our functionally pure controllers can be parallelized
         for step in 0..MAX_NUM_STEPS {
             let target_setpoint = QuadrotorState {
                 position: TARGET_POSITIONS[target_idx],
@@ -355,6 +363,7 @@ mod simulation {
                 motor_speeds: na::Vector4::zeros(),
             };
 
+            // Outer loop: Use Geometric Controller to track the full state setpoint
             let (thrust_setpoint, rate_setpoint) = geometric_controller.compute(
                 &quad_state,
                 &target_setpoint,

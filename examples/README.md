@@ -5,6 +5,15 @@ delivered by the four propellers and torques proportional to those thrusts.
 
 ## Quadrotor Modeling
 
+The 6DOF quadrotor system dynamics model is standard in the robotics and
+estimation domain. A good example of this form of model is shown in the
+[Agilicious](https://github.com/uzh-rpg/agilicious) project.
+
+The quadrotor states are
+$\mathbf{p},\mathbf{q},\mathbf{v},\boldsymbol{\omega},\boldsymbol{\varpi}$,
+respectively the absolute position, the attitude, the velocity, the body rate,
+and the individual motor speeds of the quadrotor.
+
 The quadrotor system dynamics equation is given by
 
 ```math
@@ -33,7 +42,7 @@ from individual rotor thrusts $\mathbf{f}$ using the following logic:
    ```
 
 2. The individual rotor thrusts are converted to the collective thrust and
-   torque by:
+   torque by the _mixing_ matrix
 
    ```math
    \begin{bmatrix}
@@ -45,7 +54,16 @@ from individual rotor thrusts $\mathbf{f}$ using the following logic:
    \end{bmatrix}\boldsymbol{\varpi}
    ```
 
-   > A Betaflight motor-ordering is assumed
+> [!NOTE]
+>
+> A Betaflight motor-ordering is assumed
+
+Then, the quadrotor equations of motion are integrated over time by:
+
+- For Euclidean quantities (position, velocity, body rate, motor speed), RK4
+- For attitude, mapping the body rate to a quaternion by the $\exp$ map
+  (essentially `from_scaled_axis`), then composed to the current quaternion by
+  multiplication
 
 ## Control Design
 

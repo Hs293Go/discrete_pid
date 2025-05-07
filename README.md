@@ -4,8 +4,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![CI](https://github.com/Hs293Go/discrete_pid/actions/workflows/ci.yml/badge.svg)](https://github.com/Hs293Go/discrete_pid/actions)
 [![codecov](https://codecov.io/gh/Hs293Go/discrete_pid/refs/head/main/graph/badge.svg)](https://codecov.io/gh/Hs293Go/discrete_pid)
-A correctness-first discrete PID controller for embedded and real-time
-applications.
+A discrete PID controller for embedded and real-time rust applications.
 
 | [Step Response](./examples/step_response.rs)                                                                     | [Quadrotor Rate Control](./examples/quadrotor_control.rs)                                                                |
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -16,8 +15,7 @@ applications.
 - **Correct and Principled**
 
   - **Inspired** by Brett Beauregard's battle-tested and well documented[^1]
-    [PID for Arduino](https://github.com/br3ttb/Arduino-PID-Library) and the
-    authoritative reference by Åström & Hägglund [^2]
+    [PID for Arduino](https://github.com/br3ttb/Arduino-PID-Library)
   - Verified in an extensive test suite, including numerical verification
     against Simulink’s Discrete PID Controller --- _this controller has the same
     behavior you remember from your first controls course_
@@ -30,6 +28,8 @@ applications.
     time** and tunable **LPF on derivative**.
   - Supports fine-grained control over PID activity: online (de)activation,
     (re)initialization, and pausing/resuming integration
+  - As an alternative to the functional PID controller, the _stateful_ PID
+    controller is competitive with the naive PID law in terms of speed
 
 - **Lightweight and Dependency-Free**
 
@@ -39,11 +39,10 @@ applications.
 
 ```rust
 use core::time::Duration;
-use discrete_pid::pid::{FuncPidController, PidConfigBuilder, PidContext};
-use discrete_pid::time::Micros;
+use discrete_pid::{pid, time};
 
 let loop_time = Duration::from_micros(125);
-let cfg = PidConfigBuilder::default()
+let cfg = pid::PidConfigBuilder::default()
     .kp(2.0)
     .ki(1.5)
     .sample_time(loop_time)
@@ -51,12 +50,12 @@ let cfg = PidConfigBuilder::default()
     .build()
     .expect("Failed to build a PID configuration");
 
-let controller = FuncPidController::new(cfg);
-let mut ctx = PidContext::<Micros, f32>::new_uninit();
+let controller = pid::FuncPidController::new(cfg);
+let mut ctx = pid::PidContext::new_uninit();
 
 let pos_meas = 0.5;
 let pos_setpoint = 1.0;
-let timestamp = Micros(125);
+let timestamp = time::Micros(125);
 let vel_setpoint = 2.0;
 
 let (output, new_ctx) =
@@ -88,7 +87,7 @@ python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
 ## Shoutouts
 
 - [`pid-rs`](https://crates.io/crates/pid): well-known and effective; You may
-  consider using their crate if you:
+  consider using their crate instead if you:
 
   1. Are working with simple, slow-acting processes that don't benefit from
      sample time handing and D-term filtering
@@ -103,8 +102,9 @@ python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
 > superposition of the terms, generating subtle nonlinearities and potentially
 > disrupting tuning techniques
 
-- [`pidgeon`](https://github.com/security-union/pidgeon/tree/main): impressively
-  designed; You may consider using their crate if you:
+- [`pidgeon`](https://github.com/security-union/pidgeon/tree/main): Strong
+  support for synchronization and built-in visualization; You may consider using
+  their crate instead if you:
 
   1. Need support for concurrent PID control and don't mind depending on `std`
      through `std::sync::Mutex`
@@ -116,7 +116,3 @@ This project is licensed under the [MIT License](./LICENSE) © 2025 Hs293Go
 [^1]:
     Beauregard, B. _Improving the Beginner's PID_.
     [http://brettbeauregard.com/blog/2011/04/improving-the-beginners-pid-introduction/](http://brettbeauregard.com/blog/2011/04/improving-the-beginners-pid-introduction/)
-
-[^2]:
-    Åström, K. J. "PID Controllers: Theory, Design, and Tuning". _The
-    international society of measurement and control_, 1995.
