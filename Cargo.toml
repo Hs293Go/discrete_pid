@@ -10,8 +10,14 @@ approx = "0.5.1"
 num-traits = { version = "0.2.19", default-features = false }
 nalgebra = { version = "0.33.2", optional = true }
 thiserror = { version = "2.0.12", optional = true }
+criterion = { version = "0.5", optional = true }
 
 [features]
 default = ["std"]
 std = ["dep:thiserror"]
 simulation = ["nalgebra", "std"]
+bench = ["std", "dep:criterion"] # benchmark-specific feature
+
+[[bench]]
+name = "pid_benchmark"
+harness = false
