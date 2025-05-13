@@ -22,16 +22,21 @@
 use core::ops::Add;
 use core::time::Duration;
 
-/// A trait for types that represent a instant in time for the PID controllers.
+/// A trait for representing time instants in PID controllers.
 ///
-/// This trait enables generic, `no_std`-friendly support for timekeeping in PID controllers, where
-/// [`compute`](crate::pid::FuncPidController::compute) does work only after a sample time interval has passed.
+/// `InstantLike` enables portable and efficient timekeeping, abstracting over standard and embedded-friendly
+/// time sources. The PID controller uses it to determine whether the sampling interval has elapsed.
 ///
-/// For convenience, the library provides several implementations of `InstantLike`:
-/// - [`Millis`](struct.Millis.html): Represents time in milliseconds.
-/// - [`Micros`](struct.Micros.html): Represents time in microseconds.
-/// - [`SecondsF64`](struct.SecondsF64.html): Represents time in seconds as a 64-bit float.
-/// - [`StdInstant`](struct.StdInstant.html): A wrapper around `std::time::Instant` (only available with the `std` feature).
+/// This trait is designed to be minimal and supports `no_std`. The crate provides several built-in
+/// implementations which are just thin wrappers around primitive numeric types
+///
+/// - [`Millis`] – milliseconds as an integer
+/// - [`Micros`] – microseconds as an integer
+/// - [`SecondsF64`] – floating-point seconds
+///
+/// If the `std` feature is enabled, this crate also provides:
+///
+/// - [`StdInstant`] – wrapper around `std::time::Instant`
 ///
 /// ## Example
 ///
@@ -175,7 +180,7 @@ mod std_instant {
 
     use super::{Add, Duration, InstantLike};
 
-    /// A wrapper around `std::time::Instant` satisfying the `InstantLike` trait.
+    /// A wrapper around `std::time::Instant`
     #[derive(Debug, Clone, Copy)]
     pub struct StdInstant(pub std::time::Instant);
 

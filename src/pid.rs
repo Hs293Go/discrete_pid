@@ -51,11 +51,8 @@ pub enum PidConfigError {
     #[cfg_attr(feature = "std", error("Derivative gain is negative or non-finite"))]
     InvalidDerivativeGain = 3,
 
-    /// The filter time constant is non-positive or non-finite.
-    #[cfg_attr(
-        feature = "std",
-        error("Filter time constant is non-positive or non-finite")
-    )]
+    /// The sample time constant is zero or Duration::MAX
+    #[cfg_attr(feature = "std", error("Sample time is zero or Duration::MAX"))]
     InvalidSampleTime = 4,
 
     /// The output limits are flipped or not finite.
@@ -90,7 +87,7 @@ pub enum PidConfigError {
 ///
 /// [`use_strict_causal_integrator`](PidConfig::use_strict_causal_integrator) is a flag that determines whether the integral term is updated
 /// before or after the output is computed. If set to true, the integral term is updated after the
-/// output is conmputed, such that the output strictly depends on information from the past.
+/// output is computed, such that the output strictly depends on information from the past.
 ///
 /// [`use_derivative_on_measurement`](PidConfig::use_derivative_on_measurement) is a flag that determines whether the derivative term is
 /// computed by finite-differencing the **input/measurement** or **error**. If the setpoint is
@@ -126,48 +123,16 @@ pub enum PidConfigError {
 /// ```
 #[derive(Copy, Clone, Debug)]
 pub struct PidConfig<F: FloatCore> {
-    /// Proportional gain coefficient.
-    /// Defaults to 1.0.
-    kp: F,
-
-    /// Integral gain coefficient.
-    /// Defaults to F::zero(). When combined with the default sample time of 10ms, this gives I * Ts = 1
-    ki: F,
-
-    /// Derivative gain coefficient.
-    /// Defaults to F::zero().
-    kd: F,
-
-    /// Time constant for the low-pass filter applied to the derivative term.
-    /// Defaults to F::zero().
-    filter_tc: F,
-
-    /// Sampling time for the PID controller.
-    /// Defaults to 10ms.
-    sample_time: Duration,
-
-    /// Minimum output value of the PID controller.
-    /// Defaults to negative infinity, i.e. no limit.
-    output_min: F,
-
-    /// Maximum output value of the PID controller.
-    /// Defaults to positive infinity, i.e. no limit.
-    output_max: F,
-
-    /// Whether to use a strict causal integrator.
-    /// If true, the integral term is updated after the output is computed
-    /// Defaults to true.
-    use_strict_causal_integrator: bool,
-
-    /// Whether to apply the derivative on the measurement.
-    /// if true, the derivative term is computed using the NEGATIVE backward difference between the
-    /// current and previous input.
-    /// Defaults to true.
-    use_derivative_on_measurement: bool,
-
-    /// Smoothing constant for the low-pass filter applied to the derivative term.
-    /// Not to be set directly, but calculated based on the filter time constant and sample time.
-    smoothing_constant: F,
+    kp: F,                               // Proportional gain coefficient.
+    ki: F,                               // Integral gain coefficient,
+    kd: F,                               // Derivative gain coefficient.
+    filter_tc: F,                        // Time constant for the LPF on the derivative term.
+    sample_time: Duration,               // Sampling time for the PID controller.
+    output_min: F,                       // Minimum output value of the PID controller, can be -inf
+    output_max: F,                       // Maximum output value of the PID controller, can be +inf
+    use_strict_causal_integrator: bool,  // Whether to use a strict causal integrator.
+    use_derivative_on_measurement: bool, // Whether to apply the derivative on the measurement.
+    smoothing_constant: F,               // Smoothing constant for the LPF on the derivative term.
 }
 
 fn check_kp<F: FloatCore>(kp: F) -> Result<(), PidConfigError> {
@@ -215,17 +180,17 @@ fn check_output_limits<F: FloatCore>(output_min: F, output_max: F) -> Result<(),
 impl<F: FloatCore> Default for PidConfig<F> {
     /// Creates a new [`PidConfig`] instance with the following default values.
     ///
-    /// | Parameter                     | Value     | Note                                                               |
-    /// |-------------------------------|-----------|--------------------------------------------------------------------|
-    /// | Proportional gain             | 1.0       |                                                                    |
+    /// | Parameter                     | Value     | Note                                                                        |
+    /// |-------------------------------|-----------|-----------------------------------------------------------------------------|
+    /// | Proportional gain             | 1.0       |                                                                             |
     /// | Integral gain                 | 0.01      | time-invariant gain: 1.0 when combined with the default sample time of 10ms |
-    /// | Derivative gain               | 0.0       | Disabled                                                           |
-    /// | Filter time constant          | 0.01      | in seconds                                                         |
-    /// | Sample time                   | 0.01      | in seconds                                                         |
-    /// | Output minimum                | -infinity | no limit                                                           |
-    /// | Output maximum                | +infinity | no limit                                                           |
-    /// | Use strict causal integrator  | true      |                                                                    |
-    /// | Use derivative on measurement | false     |                                                                    |
+    /// | Derivative gain               | 0.0       | Disabled                                                                    |
+    /// | Filter time constant          | 0.01      | in seconds                                                                  |
+    /// | Sample time                   | 0.01      | in seconds                                                                  |
+    /// | Output minimum                | -infinity | no limit                                                                    |
+    /// | Output maximum                | +infinity | no limit                                                                    |
+    /// | Use strict causal integrator  | false     |                                                                             |
+    /// | Use derivative on measurement | false     |                                                                             |
     fn default() -> Self {
         PidConfig {
             kp: F::one(),
@@ -299,7 +264,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// Sets the proportional gain.
     ///
     /// `kp` must be greater than zero. If you intend to disable the PID controller, call
-    /// [`PidContext::deactivate`] instead.
+    /// [`PidContext::deactivate`] or [`PidController::deactivate`] instead.
     ///
     /// # Arguments
     /// - `kp`: Proportional gain.
@@ -315,7 +280,7 @@ impl<F: FloatCore> PidConfig<F> {
 
     /// Sets the integral gain.
     ///
-    /// `ki` must not be negative; You can set `ki` to 0 to disable the derivative term.
+    /// `ki` must not be negative; You can set `ki` to 0 to disable the integral term.
     ///
     /// You pass in a time-invariant `ki`, which is scaled by the sample time to produce the
     /// internal ki value.
@@ -448,11 +413,6 @@ impl<F: FloatCore> PidConfig<F> {
 /// parameter values are validated when the `build` method is called, and an error is returned if
 /// any of the values are invalid.
 ///
-/// This builder allows the PID configuration to be fully specified at construction time and left
-/// immutable afterwards. Combined with the `FuncPidController` implementation, this allows for a
-/// immutable PID controller that can be used in a functional style, giving perfectly reproducible
-/// control outputs.
-///
 /// # Example
 ///
 /// ```rust
@@ -496,7 +456,7 @@ impl<F: FloatCore> Default for PidConfigBuilder<F> {
             sample_time: Duration::from_millis(10),
             output_min: -F::infinity(),
             output_max: F::infinity(),
-            use_strict_causal_integrator: true,
+            use_strict_causal_integrator: false,
             use_derivative_on_measurement: false,
         }
     }
@@ -677,7 +637,11 @@ trait PidAlgorithm<F: FloatCore> {
         }
         // Optional derivative on measurement to mitigate derivative kick
         let raw_derivative = if config.use_derivative_on_measurement {
-            self.prev_input() - input // Note reversed order of operands
+            // Note reversed order of operands: Derivative on measurement operated by assuming
+            // setpoints are piecewise constant (with zero derivative), allowing the rewrite
+            //
+            // d/dt(error) = d/dt(s̵e̵t̵p̵o̵i̵n̵t̵ - input) = -d/dt(input)
+            self.prev_input() - input
         } else {
             error - self.prev_error()
         };
@@ -712,243 +676,22 @@ trait PidAlgorithm<F: FloatCore> {
     }
 }
 
-/// A container for mutable state and runtime parameters of PID controllers.
+/// The stateful PID controller.
 ///
-/// This struct is used to store the internal state of the PID controller. You can query various
-/// useful information from this struct, such as he [`last_time`](PidContext::last_time) a PID
-/// computation was performed and the [`output`](PidContext::output) and
-/// [`error`](PidContext::error) at that time. Furthermore, you can manage PID runtime behavior
-/// such as [`activate`](PidContext::activate)-ing the PID, resetting the integral term, and pausing/resuming the
-/// integrator by calling appropriate methods on this struct.
-#[derive(Copy, Clone, Debug)]
-pub struct PidContext<T: InstantLike, F: FloatCore> {
-    /// Backing data of the PidAlgorithm trait
-    i_term: F,
-    prev_err: F,
-    prev_input: F,
-    prev_derivative: F,
-
-    /// For managing PID runtime behavior
-    output: F,
-    last_time: Option<T>,
-    is_active: bool,
-    is_initialized: bool,
-    integrator_activity: IntegratorActivity,
-}
-
-impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidContext<T, F> {
-    fn i_term(&self) -> F {
-        self.i_term
-    }
-
-    fn prev_error(&self) -> F {
-        self.prev_err
-    }
-
-    fn prev_input(&self) -> F {
-        self.prev_input
-    }
-
-    fn prev_derivative(&self) -> F {
-        self.prev_derivative
-    }
-}
-
-impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
-    /// Creates a new uninitialized PID context. This context is automatically initialized when the
-    /// PID controller computes its first output.
-    pub fn new_uninit() -> Self {
-        Default::default()
-    }
-
-    /// Creates a new PID context initialized to the given timestamp, input, and output values.
-    /// This initialization ensures smooth continuity of the PID controller's output under the
-    /// following assumptions:
-    ///
-    /// * The input (process value) is at a steady state (or minimally changing)
-    /// * There is no transient error at the time of initialization, such that the output is purely
-    ///   contributed by the integral term, which could be steady-state error or externally
-    ///   measured disturbance
-    ///
-    /// # Arguments
-    /// - `timestamp`: The timestamp of the initialization.
-    /// - `input`: The input (process value) at the time of initialization.
-    /// - `output`: The output of the PID controller at the time of initialization.
-    ///
-    /// # Safety
-    /// This function is not aware of output bounds. You should take care to ensure that the output
-    /// is within the output limits of the PID controller.
-    pub fn new(timestamp: T, input: F, output: F) -> Self {
-        Self {
-            i_term: output,
-            prev_err: F::zero(),
-            prev_input: input,
-            prev_derivative: F::zero(),
-            output,
-            last_time: Some(timestamp),
-            is_active: true,
-            integrator_activity: IntegratorActivity::Active,
-            is_initialized: true,
-        }
-    }
-
-    /// Returns the output (last computed value) of the PID controller.
-    pub fn output(&self) -> F {
-        self.output
-    }
-
-    /// Returns the last time the PID controller was computed.
-    pub fn last_time(&self) -> Option<T> {
-        self.last_time
-    }
-
-    /// Queries whether the PID controller is active.
-    pub fn is_active(&self) -> bool {
-        self.is_active
-    }
-
-    /// Queries the integrator activity level of the PID controller.
-    pub fn integrator_activity(&self) -> IntegratorActivity {
-        self.integrator_activity
-    }
-
-    /// Queries whether the PID controller has been initialized.
-    pub fn is_initialized(&self) -> bool {
-        self.is_initialized
-    }
-
-    /// Activates the PID controller. If the controller was previously inactive, it will be
-    /// reinitialized.
-    pub fn activate(&mut self) {
-        if !self.is_active {
-            self.is_initialized = false;
-        }
-        self.is_active = true;
-    }
-
-    /// Deactivates the PID controller. The output will not be updated and the last output will be
-    /// held unchanged.
-    pub fn deactivate(&mut self) {
-        self.is_active = false;
-    }
-
-    /// Resets the integral term of the PID controller to zero.
-    pub fn reset_integral(&mut self) {
-        self.i_term = F::zero();
-    }
-
-    /// Sets the integrator activity level of the PID controller.
-    /// If the activity level is set to `Inactive` from any other state, the integral term will be
-    /// reset to zero.
-    pub fn set_integrator_activity(&mut self, activity: IntegratorActivity) {
-        let is_active = self.integrator_activity != IntegratorActivity::Inactive;
-        if is_active && activity == IntegratorActivity::Inactive {
-            self.reset_integral();
-        }
-
-        self.integrator_activity = activity;
-    }
-}
-
-impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
-    fn default() -> Self {
-        Self {
-            i_term: F::zero(),
-            prev_err: F::zero(),
-            prev_input: F::zero(),
-            prev_derivative: F::zero(),
-            output: F::zero(),
-            last_time: None,
-            is_active: true,
-            integrator_activity: IntegratorActivity::Active,
-            is_initialized: false,
-        }
-    }
-}
-
-/// A functional PID controller.
-pub struct FuncPidController<F: FloatCore> {
-    config: PidConfig<F>,
-}
-
-impl<F: FloatCore> FuncPidController<F> {
-    /// Creates a new `FuncPidController` instance with the given configuration.
-    ///
-    /// # Arguments
-    /// - `config`: The PID configuration.
-    pub fn new(config: PidConfig<F>) -> Self {
-        FuncPidController { config }
-    }
-
-    /// Returns the PID configuration.
-    pub fn config(&self) -> &PidConfig<F> {
-        &self.config
-    }
-
-    /// Returns a mutable reference to the PID configuration. This allows you to modify the
-    /// configuration and tune the PID controller on-the-fly
-    pub fn config_mut(&mut self) -> &mut PidConfig<F> {
-        &mut self.config
-    }
-
-    /// Computes the PID control output based on the given input, setpoint, and timestamp, and
-    /// optionally a feedforward term.
-    ///
-    /// # Arguments
-    /// - `ctx`: The PID context containing the current state of the controller.
-    /// - `input`: The current process variable (PV) or input value.
-    /// - `setpoint`: The desired setpoint or target value.
-    /// - `timestamp`: The current timestamp.
-    /// - `feedforward`: An optional feedforward term to be added to the output.
-    ///
-    /// # Returns
-    /// - A tuple containing the computed output and the updated PID context.
-    pub fn compute<T: InstantLike>(
-        &self,
-        mut ctx: PidContext<T, F>,
-        input: F,
-        setpoint: F,
-        timestamp: T,
-        feedforward: Option<F>,
-    ) -> (F, PidContext<T, F>) {
-        if !ctx.is_active {
-            return (ctx.output, ctx);
-        }
-
-        let error = setpoint - input;
-
-        // If the PID controller is just switched active or has never been run before (last_time is
-        // None), initialize the state then run the controller without checking if the sample time
-        // has elapsed
-        if !ctx.is_initialized {
-            // Initialize only i-term and input/error for d-term calculation
-            ctx.prev_input = input;
-            ctx.prev_err = error;
-            ctx.i_term = ctx.output;
-            ctx.i_term = ctx
-                .i_term
-                .clamp(self.config.output_min, self.config.output_max);
-            ctx.is_initialized = true;
-        } else {
-            // If there is no need to initialize and the controller has been called before, check if the
-            // time delta is less than the sample time
-            let time_delta = timestamp.duration_since(ctx.last_time.unwrap());
-            if time_delta < self.config.sample_time {
-                return (ctx.output, ctx);
-            }
-        }
-
-        let ff = feedforward.unwrap_or(F::zero());
-        (ctx.output, ctx.i_term, ctx.prev_derivative) =
-            ctx.eval_pid(&self.config, error, input, ff, ctx.integrator_activity);
-        ctx.prev_input = input;
-        ctx.prev_err = error;
-        ctx.last_time = Some(timestamp);
-        (ctx.output, ctx)
-    }
-}
-
-/// A stateful PID controller.
+/// This PID controller has a conventional structure, managing all states internally. You can
+/// leave them to be automatically initialized at first compute with [`PidController::new_uninit`],
+/// or initialize the explicitly with [`PidController::new`].
+///
+/// # Example
+///
+/// ```rust
+/// use discrete_pid::{pid, time};
+///
+/// let config = pid::PidConfig::default();
+/// let mut pid = pid::PidController::new_uninit(config);
+///
+/// let output = pid.compute(0.0, 1.0, time::Millis(1), None);
+/// ```
 pub struct PidController<T: InstantLike, F: FloatCore> {
     /// Backing data of the PidAlgorithm trait
     i_term: F,
@@ -1134,5 +877,274 @@ impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidController<T, F> {
 
     fn prev_derivative(&self) -> F {
         self.prev_derivative
+    }
+}
+
+/// A container for mutable state and runtime parameters of PID controllers.
+///
+/// # Example
+/// ```rust
+/// use discrete_pid::{pid, time};
+///
+/// let pid = pid::FuncPidController::new(pid::PidConfig::default());
+/// let mut ctx = pid::PidContext::new_uninit();
+///
+/// (_, ctx) = pid.compute(ctx, 0.0, 1.0, time::Millis(1), None);
+///
+/// // Query the output of the PID without using the first return value of `compute`
+/// let output = ctx.output();       
+/// let last_time = ctx.last_time(); // Query the last time the PID was computed
+/// ctx.deactivate(); // Deactivate the PID controller for the next computation
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct PidContext<T: InstantLike, F: FloatCore> {
+    /// Backing data of the PidAlgorithm trait
+    i_term: F,
+    prev_err: F,
+    prev_input: F,
+    prev_derivative: F,
+
+    /// For managing PID runtime behavior
+    output: F,
+    last_time: Option<T>,
+    is_active: bool,
+    is_initialized: bool,
+    integrator_activity: IntegratorActivity,
+}
+
+impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
+    /// Creates a new uninitialized PID context. This context is automatically initialized when the
+    /// PID controller computes its first output.
+    pub fn new_uninit() -> Self {
+        Default::default()
+    }
+
+    /// Creates a new PID context initialized to the given timestamp, input, and output values.
+    /// This initialization ensures smooth continuity of the PID controller's output under the
+    /// following assumptions:
+    ///
+    /// * The input (process value) is at a steady state (or minimally changing)
+    /// * There is no transient error at the time of initialization, such that the output is purely
+    ///   contributed by the integral term, which could be steady-state error or externally
+    ///   measured disturbance
+    ///
+    /// # Arguments
+    /// - `timestamp`: The timestamp of the initialization.
+    /// - `input`: The input (process value) at the time of initialization.
+    /// - `output`: The output of the PID controller at the time of initialization.
+    ///
+    /// # Safety
+    /// This function is not aware of output bounds. You should take care to ensure that the output
+    /// is within the output limits of the PID controller.
+    pub fn new(timestamp: T, input: F, output: F) -> Self {
+        Self {
+            i_term: output,
+            prev_err: F::zero(),
+            prev_input: input,
+            prev_derivative: F::zero(),
+            output,
+            last_time: Some(timestamp),
+            is_active: true,
+            integrator_activity: IntegratorActivity::Active,
+            is_initialized: true,
+        }
+    }
+
+    /// Returns the output (last computed value) of the PID controller.
+    pub fn output(&self) -> F {
+        self.output
+    }
+
+    /// Returns the last time the PID controller was computed.
+    pub fn last_time(&self) -> Option<T> {
+        self.last_time
+    }
+
+    /// Queries whether the PID controller is active.
+    pub fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    /// Queries the integrator activity level of the PID controller.
+    pub fn integrator_activity(&self) -> IntegratorActivity {
+        self.integrator_activity
+    }
+
+    /// Queries whether the PID controller has been initialized.
+    pub fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+
+    /// Activates the PID controller. If the controller was previously inactive, it will be
+    /// reinitialized.
+    pub fn activate(&mut self) {
+        if !self.is_active {
+            self.is_initialized = false;
+        }
+        self.is_active = true;
+    }
+
+    /// Deactivates the PID controller. The output will not be updated and the last output will be
+    /// held unchanged.
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
+
+    /// Resets the integral term of the PID controller to zero.
+    pub fn reset_integral(&mut self) {
+        self.i_term = F::zero();
+    }
+
+    /// Sets the integrator activity level of the PID controller.
+    /// If the activity level is set to `Inactive` from any other state, the integral term will be
+    /// reset to zero.
+    pub fn set_integrator_activity(&mut self, activity: IntegratorActivity) {
+        let is_active = self.integrator_activity != IntegratorActivity::Inactive;
+        if is_active && activity == IntegratorActivity::Inactive {
+            self.reset_integral();
+        }
+
+        self.integrator_activity = activity;
+    }
+}
+
+impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
+    fn default() -> Self {
+        Self {
+            i_term: F::zero(),
+            prev_err: F::zero(),
+            prev_input: F::zero(),
+            prev_derivative: F::zero(),
+            output: F::zero(),
+            last_time: None,
+            is_active: true,
+            integrator_activity: IntegratorActivity::Active,
+            is_initialized: false,
+        }
+    }
+}
+
+impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidContext<T, F> {
+    fn i_term(&self) -> F {
+        self.i_term
+    }
+
+    fn prev_error(&self) -> F {
+        self.prev_err
+    }
+
+    fn prev_input(&self) -> F {
+        self.prev_input
+    }
+
+    fn prev_derivative(&self) -> F {
+        self.prev_derivative
+    }
+}
+
+/// The functional PID controller.
+///
+/// This controller is stateless and just needs to be initialized with a [`PidConfig`].
+/// However, a [`PidContext`] object is threaded in and out of its `compute` method, which is
+/// functionally pure.
+///
+/// ## Performance
+///
+/// While all advantages of functional programming apply here, [`FuncPidController::compute`] is
+/// **slower** than its stateful counterpart [`PidController::compute`] as the optimizer cannot apply SROA
+/// when the context object is passed in and returned.
+///
+/// # Example
+///
+/// ```rust
+/// use discrete_pid::{pid, time};
+///
+/// let config = pid::PidConfigBuilder::default().kp(2.0).kd(0.01).build().unwrap();
+/// let pid = pid::FuncPidController::new(config); // Final config, immutable controller
+///
+/// let mut ctx = pid::PidContext::new_uninit();
+///
+/// let mut output;
+/// (output, ctx) = pid.compute(ctx, 0.0, 1.0, time::Millis(1), None);
+/// ```
+///
+pub struct FuncPidController<F: FloatCore> {
+    config: PidConfig<F>,
+}
+
+impl<F: FloatCore> FuncPidController<F> {
+    /// Creates a new `FuncPidController` instance with the given configuration.
+    ///
+    /// # Arguments
+    /// - `config`: The PID configuration.
+    pub fn new(config: PidConfig<F>) -> Self {
+        FuncPidController { config }
+    }
+
+    /// Returns the PID configuration.
+    pub fn config(&self) -> &PidConfig<F> {
+        &self.config
+    }
+
+    /// Returns a mutable reference to the PID configuration. This allows you to modify the
+    /// configuration and tune the PID controller on-the-fly
+    pub fn config_mut(&mut self) -> &mut PidConfig<F> {
+        &mut self.config
+    }
+
+    /// Computes the PID control output based on the given input, setpoint, and timestamp, and
+    /// optionally a feedforward term.
+    ///
+    /// # Arguments
+    /// - `ctx`: The PID context containing the current state of the controller.
+    /// - `input`: The current process variable (PV) or input value.
+    /// - `setpoint`: The desired setpoint or target value.
+    /// - `timestamp`: The current timestamp.
+    /// - `feedforward`: An optional feedforward term to be added to the output.
+    ///
+    /// # Returns
+    /// - A tuple containing the computed output and the updated PID context.
+    pub fn compute<T: InstantLike>(
+        &self,
+        mut ctx: PidContext<T, F>,
+        input: F,
+        setpoint: F,
+        timestamp: T,
+        feedforward: Option<F>,
+    ) -> (F, PidContext<T, F>) {
+        if !ctx.is_active {
+            return (ctx.output, ctx);
+        }
+
+        let error = setpoint - input;
+
+        // If the PID controller is just switched active or has never been run before (last_time is
+        // None), initialize the state then run the controller without checking if the sample time
+        // has elapsed
+        if !ctx.is_initialized {
+            // Initialize only i-term and input/error for d-term calculation
+            ctx.prev_input = input;
+            ctx.prev_err = error;
+            ctx.i_term = ctx.output;
+            ctx.i_term = ctx
+                .i_term
+                .clamp(self.config.output_min, self.config.output_max);
+            ctx.is_initialized = true;
+        } else {
+            // If there is no need to initialize and the controller has been called before, check if the
+            // time delta is less than the sample time
+            let time_delta = timestamp.duration_since(ctx.last_time.unwrap());
+            if time_delta < self.config.sample_time {
+                return (ctx.output, ctx);
+            }
+        }
+
+        let ff = feedforward.unwrap_or(F::zero());
+        (ctx.output, ctx.i_term, ctx.prev_derivative) =
+            ctx.eval_pid(&self.config, error, input, ff, ctx.integrator_activity);
+        ctx.prev_input = input;
+        ctx.prev_err = error;
+        ctx.last_time = Some(timestamp);
+        (ctx.output, ctx)
     }
 }

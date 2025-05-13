@@ -4,7 +4,10 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![CI](https://github.com/Hs293Go/discrete_pid/actions/workflows/ci.yml/badge.svg)](https://github.com/Hs293Go/discrete_pid/actions)
 [![codecov](https://codecov.io/gh/Hs293Go/discrete_pid/refs/head/main/graph/badge.svg)](https://codecov.io/gh/Hs293Go/discrete_pid)
-A discrete PID controller for embedded and real-time rust applications.
+[![crates.io](https://img.shields.io/crates/v/discrete_pid.svg)](https://crates.io/crates/discrete_pid)
+[![docs.rs](https://docs.rs/discrete_pid/badge.svg)](https://docs.rs/discrete_pid)
+
+A PID controller for robotics and discrete control systems in rust.
 
 | [Step Response](./examples/step_response.rs)                                                                     | [Quadrotor Rate Control](./examples/quadrotor_control.rs)                                                                |
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -12,7 +15,7 @@ A discrete PID controller for embedded and real-time rust applications.
 
 ## Why This PID?
 
-- **Correct and Principled**
+- **Principled and Reliable**
 
   - **Inspired** by Brett Beauregard's battle-tested and well documented[^1]
     [PID for Arduino](https://github.com/br3ttb/Arduino-PID-Library)
@@ -34,6 +37,33 @@ A discrete PID controller for embedded and real-time rust applications.
 - **Lightweight and Dependency-Free**
 
   - Usage in `#![no_std]` mode only requires core float traits from `num_traits`
+
+## Application Example
+
+One of the most notable achievements of PID controllers in recent years has been
+the stabilization and control of quadrotors. We demonstrate just that using our
+PID controller in an example.
+
+![Quadrotor 3D trajectory](https://raw.githubusercontent.com/Hs293Go/discrete_pid/refs/heads/main/media/quadrotor_animation.gif)
+
+Run the example:
+
+```sh
+cargo run --example quadrotor_control --features simulation
+```
+
+Visualize the results:
+
+```sh
+python3 examples/plot_quadrotor_trajectory.py         # Generates static plot
+python3 examples/plot_quadrotor_trajectory.py --animate show  # Live 3D animation
+python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
+```
+
+In this example, we used our PID controller to track quadrotor body rates
+computed by an upstream _geometric tracking controller_. The
+[README for the examples](examples/README.md) contains more details about the
+cascaded controller and the quadrotor simulation.
 
 ## Quick Start
 
@@ -62,35 +92,13 @@ let (output, new_ctx) =
     controller.compute(ctx, pos_meas, pos_setpoint, timestamp, vel_setpoint.into());
 ```
 
-## Examples
-
-One of the most notable achievements of PID controllers in recent years has been
-the stabilization and control of quadrotors. We demonstrate just that using our
-PID controller in an example.
-
-![Quadrotor 3D trajectory](https://raw.githubusercontent.com/Hs293Go/discrete_pid/refs/heads/main/media/quadrotor_animation.gif)
-
-Run the example:
-
-```sh
-cargo run --example quadrotor_control --features simulation
-```
-
-Visualize the results:
-
-```sh
-python3 examples/plot_quadrotor_trajectory.py         # Generates static plot
-python3 examples/plot_quadrotor_trajectory.py --animate show  # Live 3D animation
-python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
-```
-
 ## Shoutouts
 
 - [`pid-rs`](https://crates.io/crates/pid): well-known and effective; You may
   consider using their crate instead if you:
 
   1. Are working with simple, slow-acting processes that don't benefit from
-     sample time handing and D-term filtering
+     sample time handling and D-term filtering
 
   2. Need to use integer process values/setpoints
 
@@ -108,6 +116,11 @@ python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
 
   1. Need support for concurrent PID control and don't mind depending on `std`
      through `std::sync::Mutex`
+
+## Documentation and Links
+
+📦 [View on crates.io](https://crates.io/crates/discrete_pid)  
+📚 [API Docs on docs.rs](https://docs.rs/discrete_pid)
 
 ## License
 
