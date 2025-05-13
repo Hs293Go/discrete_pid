@@ -170,6 +170,48 @@ pub struct PidConfig<F: FloatCore> {
     smoothing_constant: F,
 }
 
+fn check_kp<F: FloatCore>(kp: F) -> Result<(), PidConfigError> {
+    if kp <= F::zero() || !kp.is_finite() {
+        return Err(PidConfigError::InvalidProportionalGain);
+    }
+    Ok(())
+}
+
+fn check_ki<F: FloatCore>(ki: F) -> Result<(), PidConfigError> {
+    if ki < F::zero() || !ki.is_finite() {
+        return Err(PidConfigError::InvalidIntegralGain);
+    }
+    Ok(())
+}
+
+fn check_kd<F: FloatCore>(kd: F) -> Result<(), PidConfigError> {
+    if kd < F::zero() || !kd.is_finite() {
+        return Err(PidConfigError::InvalidDerivativeGain);
+    }
+    Ok(())
+}
+
+fn check_filter_tc<F: FloatCore>(filter_tc: F) -> Result<(), PidConfigError> {
+    if filter_tc <= F::zero() || !filter_tc.is_finite() {
+        return Err(PidConfigError::InvalidFilterTimeConstant);
+    }
+    Ok(())
+}
+
+fn check_sample_time(sample_time: Duration) -> Result<(), PidConfigError> {
+    if sample_time.is_zero() || sample_time == Duration::MAX {
+        return Err(PidConfigError::InvalidSampleTime);
+    }
+    Ok(())
+}
+
+fn check_output_limits<F: FloatCore>(output_min: F, output_max: F) -> Result<(), PidConfigError> {
+    if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
+        return Err(PidConfigError::InvalidOutputLimits);
+    }
+    Ok(())
+}
+
 impl<F: FloatCore> Default for PidConfig<F> {
     /// Creates a new [`PidConfig`] instance with the following default values.
     ///
@@ -254,48 +296,6 @@ impl<F: FloatCore> PidConfig<F> {
         self.use_derivative_on_measurement
     }
 
-    fn check_kp(kp: F) -> Result<(), PidConfigError> {
-        if kp <= F::zero() || !kp.is_finite() {
-            return Err(PidConfigError::InvalidProportionalGain);
-        }
-        Ok(())
-    }
-
-    fn check_ki(ki: F) -> Result<(), PidConfigError> {
-        if ki < F::zero() || !ki.is_finite() {
-            return Err(PidConfigError::InvalidIntegralGain);
-        }
-        Ok(())
-    }
-
-    fn check_kd(kd: F) -> Result<(), PidConfigError> {
-        if kd < F::zero() || !kd.is_finite() {
-            return Err(PidConfigError::InvalidDerivativeGain);
-        }
-        Ok(())
-    }
-
-    fn check_filter_tc(filter_tc: F) -> Result<(), PidConfigError> {
-        if filter_tc <= F::zero() || !filter_tc.is_finite() {
-            return Err(PidConfigError::InvalidFilterTimeConstant);
-        }
-        Ok(())
-    }
-
-    fn check_sample_time(sample_time: Duration) -> Result<(), PidConfigError> {
-        if sample_time.is_zero() || sample_time == Duration::MAX {
-            return Err(PidConfigError::InvalidSampleTime);
-        }
-        Ok(())
-    }
-
-    fn check_output_limits(output_min: F, output_max: F) -> Result<(), PidConfigError> {
-        if output_min >= output_max || output_max.is_nan() || output_min.is_nan() {
-            return Err(PidConfigError::InvalidOutputLimits);
-        }
-        Ok(())
-    }
-
     /// Sets the proportional gain.
     ///
     /// `kp` must be greater than zero. If you intend to disable the PID controller, call
@@ -308,7 +308,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Ok(())` if the gain was set successfully.
     /// - `Err(PidConfigError::InvalidProportionalGain)` if `kp <= 0` or not finite.
     pub fn set_kp(&mut self, kp: F) -> Result<(), PidConfigError> {
-        Self::check_kp(kp)?;
+        check_kp(kp)?;
         self.kp = kp;
         Ok(())
     }
@@ -327,7 +327,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Ok(())` if the gain was set successfully.
     /// - `Err(PidConfigError::InvalidIntegralGain)` if `ki < 0` or not finite.
     pub fn set_ki(&mut self, ki: F) -> Result<(), PidConfigError> {
-        Self::check_ki(ki)?;
+        check_ki(ki)?;
         self.ki = ki * F::from(self.sample_time.as_secs_f64()).unwrap();
         Ok(())
     }
@@ -346,7 +346,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Ok(())` if the gain was set successfully.
     /// - `Err(PidConfigError::InvalidDerivativeGain)` if `kd < 0` or not finite.
     pub fn set_kd(&mut self, kd: F) -> Result<(), PidConfigError> {
-        Self::check_kd(kd)?;
+        check_kd(kd)?;
         self.kd = kd / F::from(self.sample_time.as_secs_f64()).unwrap();
         Ok(())
     }
@@ -362,7 +362,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Ok(())` if the time constant was set successfully.
     /// - `Err(PidConfigError::InvalidFilterTimeConstant)` if `filter_tc <= 0` or not finite.
     pub fn set_filter_tc(&mut self, filter_tc: F) -> Result<(), PidConfigError> {
-        Self::check_filter_tc(filter_tc)?;
+        check_filter_tc(filter_tc)?;
         let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
         self.smoothing_constant = delta_t / (delta_t + filter_tc);
         self.filter_tc = filter_tc;
@@ -381,7 +381,7 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Ok(())` if the sample time was set successfully.
     /// - `Err(PidConfigError::InvalidSampleTime)` if `sample_time.is_zero()` or `sample_time == Duration::MAX`.
     pub fn set_sample_time(&mut self, sample_time: Duration) -> Result<(), PidConfigError> {
-        Self::check_sample_time(sample_time)?;
+        check_sample_time(sample_time)?;
 
         let ratio = F::from(sample_time.as_secs_f64() / self.sample_time.as_secs_f64()).unwrap();
 
@@ -412,7 +412,7 @@ impl<F: FloatCore> PidConfig<F> {
         output_min: F,
         output_max: F,
     ) -> Result<(), PidConfigError> {
-        Self::check_output_limits(output_min, output_max)?;
+        check_output_limits(output_min, output_max)?;
 
         self.output_min = output_min;
         self.output_max = output_max;
@@ -592,12 +592,12 @@ impl<F: FloatCore> PidConfigBuilder<F> {
     /// - `Err(PidConfigError)` if any of the configured parameters is invalid. Refer to the
     ///   section [Invariants](PidConfig#Invariants) for details.
     pub fn build(self) -> Result<PidConfig<F>, PidConfigError> {
-        PidConfig::check_kp(self.kp)?;
-        PidConfig::check_ki(self.total_ki)?;
-        PidConfig::check_kd(self.total_kd)?;
-        PidConfig::check_filter_tc(self.filter_tc)?;
-        PidConfig::<F>::check_sample_time(self.sample_time)?;
-        PidConfig::check_output_limits(self.output_min, self.output_max)?;
+        check_kp(self.kp)?;
+        check_ki(self.total_ki)?;
+        check_kd(self.total_kd)?;
+        check_filter_tc(self.filter_tc)?;
+        check_sample_time(self.sample_time)?;
+        check_output_limits(self.output_min, self.output_max)?;
 
         let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
         let smoothing_constant = delta_t / (delta_t + self.filter_tc);
