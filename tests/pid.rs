@@ -531,8 +531,8 @@ mod test_pid_qualitative_performance {
 
             // Compute once with the integral active, then manually compute the i-term after this step
             (_, ctx) = pid.compute(ctx, 0.0, 8.0, get_next_timestamp(&pid, &ctx), None);
-            let last_i_term =
-                ctx.error() * pid.config().ki() * pid.config().sample_time().as_secs_f64();
+            let error = 8.0;
+            let last_i_term = error * pid.config().ki() * pid.config().sample_time().as_secs_f64();
 
             ctx.set_integrator_activity(IntegratorActivity::HoldIntegration);
 
@@ -624,10 +624,8 @@ mod test_pid_qualitative_performance {
                 (expected, ctx) =
                     pid.compute(ctx, input, setpoint, get_next_timestamp(&pid, &ctx), None);
 
-                let error = setpoint - input;
                 // Check that the output is as expected
                 assert_eq!(ctx.output(), expected);
-                assert_eq!(ctx.error(), error);
             }
         }
 
@@ -658,6 +656,7 @@ mod test_pid_qualitative_performance {
                 }
             }
         }
+
         #[test]
         fn test_output_within_limits() {
             let (pid, mut ctx) = make_controller();
@@ -765,6 +764,33 @@ mod test_stateful_pid {
     }
 
     #[test]
+    fn test_noop_until_sample_time_elapsed() {
+        const N_STEPS: u64 = 10;
+
+        let mut pid = make_stateful_controller();
+        let mut output: f64;
+
+        // Compute once to begin timekeeping
+        let expected = pid.compute(0.0, 1.5, get_next_timestamp_stateful(&pid), None);
+
+        let init_time = pid.last_time().unwrap();
+        // Check that output is unchanged until sample time has elapsed
+        for i in 0..=N_STEPS {
+            let small = init_time
+                + pid
+                    .config()
+                    .sample_time()
+                    .mul_f64(i as f64 / N_STEPS as f64);
+            output = pid.compute(0.0, 1.5, small, None);
+            if i < N_STEPS {
+                assert_eq!(output, expected);
+            } else {
+                assert_ne!(output, expected);
+            }
+        }
+    }
+
+    #[test]
     fn test_result_queries() {
         let mut pid = make_stateful_controller();
 
@@ -778,10 +804,8 @@ mod test_stateful_pid {
         ] {
             let expected = pid.compute(input, setpoint, get_next_timestamp_stateful(&pid), None);
 
-            let error = setpoint - input;
             // Check that the output is as expected
             assert_eq!(pid.output(), expected);
-            assert_eq!(pid.error(), error);
         }
     }
 
@@ -799,8 +823,11 @@ mod test_stateful_pid {
         assert!(pid.is_initialized());
         assert!(pid.is_active());
 
+        let expected = pid.output();
         pid.deactivate();
         assert!(!pid.is_active());
+        let result = pid.compute(0.0, 1.0, timestamp, None);
+        assert_eq!(result, expected);
 
         for _ in 0..2 {
             pid.activate();
@@ -848,6 +875,28 @@ mod test_stateful_pid {
             resetted_output,
             base_error + base_error * pid.config().sample_time().as_secs_f64()
         );
+    }
+
+    #[test]
+    fn test_derivative_kick_mitigation() {
+        let mut pid = make_stateful_controller();
+
+        assert!(pid.config_mut().set_kd(1.0).is_ok());
+
+        // An initial step to start storing error/input
+        pid.compute(0.0, 5.0, get_next_timestamp_stateful(&pid), None);
+
+        const NEW_SETPOINT: f64 = 50.0;
+
+        pid.config_mut().set_use_derivative_on_measurement(false);
+        let output_no_derivative_on_meas =
+            pid.compute(1.0, NEW_SETPOINT, get_next_timestamp_stateful(&pid), None);
+
+        pid.config_mut().set_use_derivative_on_measurement(true);
+        let output_with_derivative_on_meas =
+            pid.compute(1.0, NEW_SETPOINT, get_next_timestamp_stateful(&pid), None);
+
+        assert!(output_with_derivative_on_meas < output_no_derivative_on_meas);
     }
 
     #[test]
