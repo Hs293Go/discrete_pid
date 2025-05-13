@@ -21,7 +21,9 @@
 mod fixtures;
 use fixtures::test_pid;
 
-use discrete_pid::pid::{IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError};
+use discrete_pid::pid::{
+    IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError, PidMemory,
+};
 
 use discrete_pid::time::Millis;
 use std::time::Duration;
@@ -561,20 +563,26 @@ mod test_pid_qualitative_performance {
 
             const NEW_SETPOINT: f64 = 10.0;
 
+            println!("NO DERIVATIVE ON MEAS");
             pid.config_mut().set_use_derivative_on_measurement(false);
             let (output_no_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
+            println!("WITH DERIVATIVE ON MEAS");
             pid.config_mut().set_use_derivative_on_measurement(true);
             let (output_with_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
+            println!("NO DERIVATIVE");
             assert!(pid.config_mut().set_kd(0.0).is_ok());
             let (output_no_derivative, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
             // Compared to the output with no derivative term, the output with derivative is boosted
-            assert!(output_no_derivative_on_meas > output_no_derivative);
+            assert!(
+                output_no_derivative_on_meas > output_no_derivative,
+                "{output_no_derivative_on_meas} > {output_no_derivative}"
+            );
 
             // Compared to the output with no derivative term, the output with derivative on measurement is dampened
             assert!(output_with_derivative_on_meas < output_no_derivative);

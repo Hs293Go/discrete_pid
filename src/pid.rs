@@ -647,6 +647,109 @@ pub enum IntegratorActivity {
     Active,
 }
 
+/// A trait for structures that contain mutable state and runtime parameters of PID controllers.
+pub trait PidMemory<T: InstantLike, F: FloatCore> {
+    /// Queries the integral term of the PID controller. This accumulates the error multiplied by
+    /// the I gain to avoid integral jump.
+    fn i_term(&self) -> F;
+
+    /// Queries the last error value. This is available for the user to query, and is also used to compute
+    /// the derivative term when derivative on measurement is off
+    fn error(&self) -> F;
+
+    /// Queries the last input value. This is used to compute the derivative term when derivative
+    /// on measurement is on
+    fn input(&self) -> F;
+
+    /// Queries the last output value. This is available for the user to query, and is also used to hold
+    /// the last output unchanged when the PID controller is inactive
+    fn output(&self) -> F;
+
+    /// Queries the last derivative value. This is used by the low-pass filter to smooth the derivative
+    /// Users should not access this directly
+    fn last_derivative(&self) -> F;
+
+    /// Queries the last time the PID controller was computed. This is compared to the current time to
+    /// determine if `sample_time` has elapsed since the last computation and the controller should
+    /// compute a new output. When the PID has never been run before, this is set to None.
+    fn last_time(&self) -> Option<T>;
+
+    /// Queries the activity level of the PID controller. This determines if the integrator is active,
+    /// holding the last value unchanged, or inactive and zeroed.
+    fn integrator_activity(&self) -> IntegratorActivity;
+
+    /// Queries whether the PID controller is active. If false, the output will not be
+    /// updated and the last output will be held unchanged.
+    fn is_active(&self) -> bool;
+
+    /// Queries whether the PID controller has been initialized. This is used to
+    /// reinitialize the controller when upon being activated
+    fn is_initialized(&self) -> bool;
+
+    /// Saves the working state of the PID controller.
+    fn save(&mut self, error: F, input: F, output: F, time: T);
+}
+
+/// A trait for PID algorithms.
+pub trait PidAlgorithm<T: InstantLike, F: FloatCore>: PidMemory<T, F> {
+    /// Checks if the sample time has elapsed since the last computation. This is used to determine
+    /// whether the PID computation should be performed.
+    ///
+    /// # Arguments
+    /// - `config`: The PID configuration providing the sample_time
+    /// - `now`: The current time.
+    fn sample_time_elapsed(&self, config: &PidConfig<F>, now: T) -> bool {
+        let time_delta = now.duration_since(self.last_time().unwrap());
+        time_delta >= config.sample_time
+    }
+
+    /// Computes the "updated" integral term of the PID controller.
+    ///
+    /// For bumpless transfer, this is the mathematical integral scaled by the integral term.
+    /// Whether the integral term is updated or not depends on the integrator activity level.
+    /// This function is pure and computes the NEW integral term, and its return value must be
+    /// saved to the integral term by the caller.
+    ///
+    /// # Arguments
+    /// - `config`: The PID configuration providing the integral gain
+    /// - `error`: The error value.
+    #[must_use]
+    fn compute_i_term(&self, config: &PidConfig<F>, error: F) -> F {
+        match self.integrator_activity() {
+            IntegratorActivity::Inactive => F::zero(),
+            IntegratorActivity::HoldIntegration => self.i_term(),
+            IntegratorActivity::Active => {
+                (self.i_term() + config.ki * error).clamp(config.output_min, config.output_max)
+            }
+        }
+    }
+
+    /// Computes the "updated" derivative of the PID controller with low-pass filtering
+    ///
+    /// The derivative is computed on the error or the input, depending on the configuration.
+    /// This function is pure and computes the NEW derivative, and its return value must be
+    /// saved to the integral term by the caller.
+    ///
+    /// # Arguments
+    /// - `config`: The PID configuration providing the derivative gain and filter configuration
+    /// - `input`: The current input value.
+    /// - `error`: The error value.
+    fn compute_derivative(&self, config: &PidConfig<F>, input: F, error: F) -> F {
+        // Optional derivative on measurement to mitigate derivative kick
+        let raw_derivative = if config.use_derivative_on_measurement {
+            self.input() - input // Note reversed order of operands
+        } else {
+            error - self.error()
+        };
+
+        // Pass the derivative through a first-order LPF
+        config.smoothing_constant * raw_derivative
+            + (F::one() - config.smoothing_constant) * self.last_derivative()
+    }
+}
+
+impl<T: InstantLike, F: FloatCore, M: PidMemory<T, F>> PidAlgorithm<T, F> for M {}
+
 /// A container for mutable state and runtime parameters of PID controllers.
 ///
 /// This struct is used to store the internal state of the PID controller. You can query various
@@ -657,43 +760,60 @@ pub enum IntegratorActivity {
 /// integrator by calling appropriate methods on this struct.
 #[derive(Copy, Clone, Debug)]
 pub struct PidContext<T: InstantLike, F: FloatCore> {
-    /// The integral term of the PID controller. This accumulates the error multiplied by the I
-    /// gain to avoid integral jump.
-    /// Users should not access this directly
     i_term: F,
-
-    /// The last error value. This is available for the user to query, and is also used to compute
-    /// the derivative term when derivative on measurement is off
     last_err: F,
-
-    /// The last input value. This is used to compute the derivative term when derivative on
-    /// measurement is on
     last_input: F,
-
-    /// The last output value. This is available for the user to query, and is also used to hold
-    /// the last output unchanged when the PID controller is inactive
     last_output: F,
-
-    /// The last derivative value. This is used by the low-pass filter to smooth the derivative
-    /// Users should not access this directly
-    last_derivative: F,
-
-    /// The last time the PID controller was computed. This is compared to the current time to
-    /// determine if `sample_time` has elapsed since the last computation and the controller should
-    /// compute a new output. When the PID has never been run before, this is set to None.
+    derivative: F,
     last_time: Option<T>,
-
-    /// The activity level of the PID controller. This determines if the integrator is active,
-    /// holding the last value unchanged, or inactive and zeroed.
     integrator_activity: IntegratorActivity,
-
-    /// A flag indicating whether the PID controller is active. If false, the output will not be
-    /// updated and the last output will be held unchanged.
     is_active: bool,
-
-    /// A flag indicating whether the PID controller has been initialized. This is used to
-    /// reinitialize the controller when upon being activated
     is_initialized: bool,
+}
+
+impl<T: InstantLike, F: FloatCore> PidMemory<T, F> for PidContext<T, F> {
+    fn i_term(&self) -> F {
+        self.i_term
+    }
+
+    fn error(&self) -> F {
+        self.last_err
+    }
+
+    fn input(&self) -> F {
+        self.last_input
+    }
+
+    fn output(&self) -> F {
+        self.last_output
+    }
+
+    fn last_derivative(&self) -> F {
+        self.derivative
+    }
+
+    fn last_time(&self) -> Option<T> {
+        self.last_time
+    }
+
+    fn integrator_activity(&self) -> IntegratorActivity {
+        self.integrator_activity
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+
+    fn save(&mut self, error: F, input: F, output: F, time: T) {
+        self.last_err = error;
+        self.last_input = input;
+        self.last_output = output;
+        self.last_time = Some(time);
+    }
 }
 
 impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
@@ -722,7 +842,7 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
             last_err: F::zero(),
             last_input: input,
             last_output: output,
-            last_derivative: F::zero(),
+            derivative: F::zero(),
             last_time: Some(timestamp),
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
@@ -800,52 +920,13 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
             last_err: F::zero(),
             last_input: F::zero(),
             last_output: F::zero(),
-            last_derivative: F::zero(),
+            derivative: F::zero(),
             last_time: None,
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
             is_initialized: false,
         }
     }
-}
-
-fn sample_time_elapsed<T: InstantLike, F: FloatCore>(
-    config: &PidConfig<F>,
-    now: T,
-    last_time: T,
-) -> bool {
-    let time_delta = now.duration_since(last_time);
-    time_delta >= config.sample_time
-}
-
-fn update_integral<F: FloatCore>(
-    config: &PidConfig<F>,
-    activity: IntegratorActivity,
-    i_term: F,
-    error: F,
-) -> F {
-    match activity {
-        IntegratorActivity::Inactive => F::zero(),
-        IntegratorActivity::HoldIntegration => i_term,
-        IntegratorActivity::Active => (i_term + config.ki * error).clamp(F::zero(), F::infinity()),
-    }
-}
-
-fn apply_lpf<F: FloatCore>(config: &PidConfig<F>, raw_derivative: F, last_derivative: F) -> F {
-    config.smoothing_constant * raw_derivative
-        + (F::one() - config.smoothing_constant) * last_derivative
-}
-
-fn compute_pid<F: FloatCore>(
-    config: &PidConfig<F>,
-    error: F,
-    i_term: F,
-    derivative: F,
-    feedforward: Option<F>,
-) -> F {
-    let output =
-        config.kp * error + i_term + config.kd * derivative + feedforward.unwrap_or(F::zero());
-    output.clamp(config.output_min, config.output_max)
 }
 
 /// A functional PID controller.
@@ -903,49 +984,36 @@ impl<F: FloatCore> FuncPidController<F> {
         // None), initialize the state then run the controller without checking if the sample time
         // has elapsed
         if !ctx.is_initialized {
-            ctx.last_time = Some(timestamp);
-            ctx.last_input = input;
-            ctx.last_err = error;
-            ctx.i_term = ctx.last_output;
+            ctx.save(error, input, ctx.last_output, timestamp);
             ctx.i_term = ctx
-                .i_term
+                .last_output
                 .clamp(self.config.output_min, self.config.output_max);
             ctx.is_initialized = true;
         } else {
             // If there is no need to initialize and the controller has been called before, check if the
             // time delta is less than the sample time
-            if !sample_time_elapsed(&self.config, timestamp, ctx.last_time.unwrap()) {
+            if !ctx.sample_time_elapsed(&self.config, timestamp) {
                 return (ctx.last_output, ctx);
             }
         }
 
         if !self.config.use_strict_causal_integrator {
-            ctx.i_term = update_integral(&self.config, ctx.integrator_activity, ctx.i_term, error);
+            ctx.i_term = ctx.compute_i_term(&self.config, error);
         }
+        ctx.derivative = ctx.compute_derivative(&self.config, input, error);
 
-        // Optional derivative on measurement to mitigate derivative kick
-        let raw_derivative = if self.config.use_derivative_on_measurement {
-            ctx.last_input - input // Note reversed order of operands
-        } else {
-            error - ctx.last_err
-        };
-
-        // Pass the derivative through a first-order LPF
-        let derivative = apply_lpf(&self.config, raw_derivative, ctx.last_derivative);
-        ctx.last_derivative = derivative;
-
-        // Clamp output to prevent windup
-        let clamped_output = compute_pid(&self.config, error, ctx.i_term, derivative, feedforward);
+        let mut output = self.config.kp * error
+            + ctx.i_term
+            + self.config.kd * ctx.derivative
+            + feedforward.unwrap_or(F::zero());
+        output = output.clamp(self.config.output_min, self.config.output_max);
 
         if self.config.use_strict_causal_integrator {
-            ctx.i_term = update_integral(&self.config, ctx.integrator_activity, ctx.i_term, error);
+            ctx.i_term = ctx.compute_i_term(&self.config, error);
         }
 
-        ctx.last_input = input;
-        ctx.last_err = error;
-        ctx.last_time = Some(timestamp);
-        ctx.last_output = clamped_output;
-        (clamped_output, ctx)
+        ctx.save(error, input, output, timestamp);
+        (output, ctx)
     }
 }
 
@@ -970,7 +1038,7 @@ pub struct PidController<T: InstantLike, F: FloatCore> {
 
     /// The last derivative value. This is used by the low-pass filter to smooth the derivative
     /// Users should not access this directly
-    last_derivative: F,
+    derivative: F,
 
     /// The last time the PID controller was computed. This is compared to the current time to
     /// determine if `sample_time` has elapsed since the last computation and the controller should
@@ -993,15 +1061,15 @@ pub struct PidController<T: InstantLike, F: FloatCore> {
 }
 
 impl<T: InstantLike, F: FloatCore> PidController<T, F> {
-    /// Creates a new PID controller with the given configuration without initializing the context,
-    /// effectively setting the internal context to [`PidContext::new_uninit`].
+    /// Creates a new PID controller with the given configuration without initializing working
+    /// variables
     pub fn new_uninit(config: PidConfig<F>) -> Self {
         Self {
             i_term: F::zero(),
             last_err: F::zero(),
             last_input: F::zero(),
             last_output: F::zero(),
-            last_derivative: F::zero(),
+            derivative: F::zero(),
             last_time: None,
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
@@ -1010,15 +1078,15 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
     }
 
-    /// Creates a new PID controller with the given configuration and initializes the context by
-    /// forwarding arguments to [`PidContext::new`].
+    /// Creates a new PID controller with the given configuration and initializes the working
+    /// variables. Refer to [`PidContext::new`].
     pub fn new(config: PidConfig<F>, timestamp: T, input: F, output: F) -> Self {
         Self {
-            i_term: output,
+            i_term: output.clamp(config.output_min, config.output_max),
             last_err: F::zero(),
             last_input: input,
-            last_output: output,
-            last_derivative: F::zero(),
+            last_output: output.clamp(config.output_min, config.output_max),
+            derivative: F::zero(),
             last_time: Some(timestamp),
             is_active: true,
             integrator_activity: IntegratorActivity::Active,
@@ -1060,9 +1128,7 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         // None), initialize the state then run the controller without checking if the sample time
         // has elapsed
         if !self.is_initialized {
-            self.last_time = Some(timestamp);
-            self.last_input = input;
-            self.last_err = error;
+            self.save(error, input, self.last_output, timestamp);
             self.i_term = self.last_output;
             self.i_term = self
                 .i_term
@@ -1071,70 +1137,30 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         } else {
             // If there is no need to initialize and the controller has been called before, check if the
             // time delta is less than the sample time
-            if !sample_time_elapsed(&self.config, timestamp, self.last_time.unwrap()) {
+            if !self.sample_time_elapsed(&self.config, timestamp) {
                 return self.last_output;
             }
         }
 
         if !self.config.use_strict_causal_integrator {
-            self.i_term =
-                update_integral(&self.config, self.integrator_activity, self.i_term, error);
+            self.i_term = self.compute_i_term(&self.config, error);
         }
 
-        // Optional derivative on measurement to mitigate derivative kick
-        let raw_derivative = if self.config.use_derivative_on_measurement {
-            self.last_input - input // Note reversed order of operands
-        } else {
-            error - self.last_err
-        };
-
-        // Pass the derivative through a first-order LPF
-        let derivative = apply_lpf(&self.config, raw_derivative, self.last_derivative);
-        self.last_derivative = derivative;
+        self.derivative = self.compute_derivative(&self.config, input, error);
 
         // Clamp output to prevent windup
-        let clamped_output = compute_pid(&self.config, error, self.i_term, derivative, feedforward);
+        let mut output = self.config.kp * error
+            + self.i_term
+            + self.config.kd * self.derivative
+            + feedforward.unwrap_or(F::zero());
+        output = output.clamp(self.config.output_min, self.config.output_max);
 
         if self.config.use_strict_causal_integrator {
-            self.i_term =
-                update_integral(&self.config, self.integrator_activity, self.i_term, error);
+            self.i_term = self.compute_i_term(&self.config, error);
         }
 
-        self.last_input = input;
-        self.last_err = error;
-        self.last_time = Some(timestamp);
-        self.last_output = clamped_output;
-        clamped_output
-    }
-
-    /// Returns the output (last computed value) of the PID controller.
-    pub fn output(&self) -> F {
-        self.last_output
-    }
-
-    /// Returns the error (difference between setpoint and input) of the PID controller.
-    pub fn error(&self) -> F {
-        self.last_err
-    }
-
-    /// Returns the last time the PID controller was computed.
-    pub fn last_time(&self) -> Option<T> {
-        self.last_time
-    }
-
-    /// Queries whether the PID controller is active.
-    pub fn is_active(&self) -> bool {
-        self.is_active
-    }
-
-    /// Queries the integrator activity level of the PID controller.
-    pub fn integrator_activity(&self) -> IntegratorActivity {
-        self.integrator_activity
-    }
-
-    /// Queries whether the PID controller has been initialized.
-    pub fn is_initialized(&self) -> bool {
-        self.is_initialized
+        self.save(error, input, output, timestamp);
+        output
     }
 
     /// Activates the PID controller. If the controller was previously inactive, it will be
@@ -1167,5 +1193,50 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
 
         self.integrator_activity = activity;
+    }
+}
+
+impl<T: InstantLike, F: FloatCore> PidMemory<T, F> for PidController<T, F> {
+    fn i_term(&self) -> F {
+        self.i_term
+    }
+
+    fn error(&self) -> F {
+        self.last_err
+    }
+
+    fn input(&self) -> F {
+        self.last_input
+    }
+
+    fn output(&self) -> F {
+        self.last_output
+    }
+
+    fn last_derivative(&self) -> F {
+        self.derivative
+    }
+
+    fn last_time(&self) -> Option<T> {
+        self.last_time
+    }
+
+    fn integrator_activity(&self) -> IntegratorActivity {
+        self.integrator_activity
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+
+    fn save(&mut self, error: F, input: F, output: F, time: T) {
+        self.last_err = error;
+        self.last_input = input;
+        self.last_output = output;
+        self.last_time = Some(time);
     }
 }
