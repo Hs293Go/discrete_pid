@@ -21,11 +21,8 @@
 mod fixtures;
 use fixtures::test_pid;
 
-use discrete_pid::pid::{
-    IntegratorActivity, PidConfig, PidConfigBuilder, PidConfigError, PidMemory,
-};
+use discrete_pid::{pid, time};
 
-use discrete_pid::time::Millis;
 use std::time::Duration;
 
 mod test_pid_config {
@@ -55,7 +52,7 @@ mod test_pid_config {
             // Setting negative kp should fail
             assert_eq!(
                 config.set_kp(*it),
-                Err(PidConfigError::InvalidProportionalGain)
+                Err(pid::PidConfigError::InvalidProportionalGain)
             );
 
             // Failing to set kp should not change the value
@@ -65,17 +62,17 @@ mod test_pid_config {
 
     #[test]
     fn test_build_kp() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config.set_kp(NEW_KP).is_ok());
 
-        let built_config = PidConfigBuilder::default().kp(NEW_KP).build();
+        let built_config = pid::PidConfigBuilder::default().kp(NEW_KP).build();
         assert!(built_config.is_ok());
         assert_eq!(built_config.unwrap().kp(), default_init_config.kp());
 
         for it in INVALID_KP_VALUES {
             assert_eq!(
-                PidConfigBuilder::default().kp(*it).build().map(|_| ()),
-                Err(PidConfigError::InvalidProportionalGain)
+                pid::PidConfigBuilder::default().kp(*it).build().map(|_| ()),
+                Err(pid::PidConfigError::InvalidProportionalGain)
             );
         }
     }
@@ -101,7 +98,10 @@ mod test_pid_config {
         assert_eq!(config.ki(), NEW_KI);
 
         for it in INVALID_KI_VALUES {
-            assert_eq!(config.set_ki(*it), Err(PidConfigError::InvalidIntegralGain));
+            assert_eq!(
+                config.set_ki(*it),
+                Err(pid::PidConfigError::InvalidIntegralGain)
+            );
 
             // Failing to set ki should not change the value
             assert_eq!(config.ki(), NEW_KI);
@@ -114,14 +114,14 @@ mod test_pid_config {
 
     #[test]
     fn test_build_ki() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config.set_ki(NEW_KI).is_ok());
 
-        let built_config = PidConfigBuilder::default().ki(NEW_KI).build();
+        let built_config = pid::PidConfigBuilder::default().ki(NEW_KI).build();
         assert!(built_config.is_ok());
         assert_eq!(built_config.unwrap().ki(), default_init_config.ki());
 
-        let built_config_2 = PidConfigBuilder::default()
+        let built_config_2 = pid::PidConfigBuilder::default()
             .ki(10.0)
             .sample_time(Duration::from_millis(200))
             .build();
@@ -130,8 +130,8 @@ mod test_pid_config {
 
         for it in INVALID_KI_VALUES {
             assert_eq!(
-                PidConfigBuilder::default().ki(*it).build().map(|_| ()),
-                Err(PidConfigError::InvalidIntegralGain)
+                pid::PidConfigBuilder::default().ki(*it).build().map(|_| ()),
+                Err(pid::PidConfigError::InvalidIntegralGain)
             );
         }
     }
@@ -159,7 +159,7 @@ mod test_pid_config {
         for it in INVALID_KD_VALUES {
             assert_eq!(
                 config.set_kd(*it),
-                Err(PidConfigError::InvalidDerivativeGain)
+                Err(pid::PidConfigError::InvalidDerivativeGain)
             );
 
             // Failing to set kd should not change the value
@@ -173,14 +173,14 @@ mod test_pid_config {
 
     #[test]
     fn test_build_kd() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config.set_kd(NEW_KD).is_ok());
 
-        let built_config = PidConfigBuilder::default().kd(NEW_KD).build();
+        let built_config = pid::PidConfigBuilder::default().kd(NEW_KD).build();
         assert!(built_config.is_ok());
         assert_eq!(built_config.unwrap().kd(), default_init_config.kd());
 
-        let built_config_2 = PidConfigBuilder::default()
+        let built_config_2 = pid::PidConfigBuilder::default()
             .kd(10.0)
             .sample_time(Duration::from_millis(200))
             .build();
@@ -189,8 +189,8 @@ mod test_pid_config {
 
         for it in INVALID_KD_VALUES {
             assert_eq!(
-                PidConfigBuilder::default().kd(*it).build().map(|_| ()),
-                Err(PidConfigError::InvalidDerivativeGain)
+                pid::PidConfigBuilder::default().kd(*it).build().map(|_| ()),
+                Err(pid::PidConfigError::InvalidDerivativeGain)
             );
         }
     }
@@ -214,7 +214,7 @@ mod test_pid_config {
         for it in INVALID_FILTER_TC_VALUES {
             assert_eq!(
                 config.set_filter_tc(*it),
-                Err(PidConfigError::InvalidFilterTimeConstant)
+                Err(pid::PidConfigError::InvalidFilterTimeConstant)
             );
 
             // Failing to set filter time constant should not change the value
@@ -224,10 +224,10 @@ mod test_pid_config {
 
     #[test]
     fn test_build_filter_tc() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config.set_filter_tc(NEW_TC).is_ok());
 
-        let built_config = PidConfigBuilder::default().filter_tc(NEW_TC).build();
+        let built_config = pid::PidConfigBuilder::default().filter_tc(NEW_TC).build();
         assert!(built_config.is_ok());
         assert_eq!(
             built_config.unwrap().filter_tc(),
@@ -236,11 +236,11 @@ mod test_pid_config {
 
         for it in INVALID_FILTER_TC_VALUES {
             assert_eq!(
-                PidConfigBuilder::default()
+                pid::PidConfigBuilder::default()
                     .filter_tc(*it)
                     .build()
                     .map(|_| ()),
-                Err(PidConfigError::InvalidFilterTimeConstant)
+                Err(pid::PidConfigError::InvalidFilterTimeConstant)
             );
         }
     }
@@ -269,7 +269,7 @@ mod test_pid_config {
         for it in INVALID_SAMPLE_TIME_VALUES {
             assert_eq!(
                 config.set_sample_time(*it),
-                Err(PidConfigError::InvalidSampleTime)
+                Err(pid::PidConfigError::InvalidSampleTime)
             );
 
             // Failing to set sample time should not change the value
@@ -279,10 +279,10 @@ mod test_pid_config {
 
     #[test]
     fn test_build_sample_time() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config.set_sample_time(NEW_SAMPLE_TIME).is_ok());
 
-        let built_config = PidConfigBuilder::<f64>::default()
+        let built_config = pid::PidConfigBuilder::<f64>::default()
             .sample_time(NEW_SAMPLE_TIME)
             .build();
         assert!(built_config.is_ok());
@@ -293,11 +293,11 @@ mod test_pid_config {
 
         for it in INVALID_SAMPLE_TIME_VALUES {
             assert_eq!(
-                PidConfigBuilder::<f64>::default()
+                pid::PidConfigBuilder::<f64>::default()
                     .sample_time(*it)
                     .build()
                     .map(|_| ()),
-                Err(PidConfigError::InvalidSampleTime)
+                Err(pid::PidConfigError::InvalidSampleTime)
             );
         }
     }
@@ -331,7 +331,7 @@ mod test_pid_config {
         for (lb, ub) in INVALID_OUTPUT_LIMITS {
             assert_eq!(
                 config.set_output_limits(*lb, *ub),
-                Err(PidConfigError::InvalidOutputLimits)
+                Err(pid::PidConfigError::InvalidOutputLimits)
             );
 
             // Failing to set output limits should not change the value
@@ -342,12 +342,12 @@ mod test_pid_config {
 
     #[test]
     fn test_build_output_limits() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         assert!(default_init_config
             .set_output_limits(NEW_OUTPUT_MIN, NEW_OUTPUT_MAX)
             .is_ok());
 
-        let built_config = PidConfigBuilder::default()
+        let built_config = pid::PidConfigBuilder::default()
             .output_limits(NEW_OUTPUT_MIN, NEW_OUTPUT_MAX)
             .build();
         assert!(built_config.is_ok());
@@ -362,11 +362,11 @@ mod test_pid_config {
 
         for (lb, ub) in INVALID_OUTPUT_LIMITS {
             assert_eq!(
-                PidConfigBuilder::default()
+                pid::PidConfigBuilder::default()
                     .output_limits(*lb, *ub)
                     .build()
                     .map(|_| ()),
-                Err(PidConfigError::InvalidOutputLimits)
+                Err(pid::PidConfigError::InvalidOutputLimits)
             );
         }
     }
@@ -391,11 +391,11 @@ mod test_pid_config {
 
     #[test]
     fn test_build_flags() {
-        let mut default_init_config = PidConfig::<f64>::default();
+        let mut default_init_config = pid::PidConfig::<f64>::default();
         default_init_config.set_use_derivative_on_measurement(true);
         default_init_config.set_use_strict_causal_integrator(true);
 
-        let built_config = PidConfigBuilder::<f64>::default()
+        let built_config = pid::PidConfigBuilder::<f64>::default()
             .use_derivative_on_measurement(true)
             .use_strict_causal_integrator(true)
             .build();
@@ -412,16 +412,15 @@ mod test_pid_config {
 }
 
 mod test_pid_qualitative_performance {
-    use discrete_pid::pid::{FuncPidController, PidContext};
 
     use super::test_pid::make_controller;
     use super::*;
 
     pub fn get_next_timestamp(
-        pid: &FuncPidController<f64>,
-        ctx: &PidContext<Millis, f64>,
-    ) -> Millis {
-        let now = ctx.last_time().unwrap_or(Millis(0));
+        pid: &pid::FuncPidController<f64>,
+        ctx: &pid::PidContext<time::Millis, f64>,
+    ) -> time::Millis {
+        let now = ctx.last_time().unwrap_or(time::Millis(0));
         now + pid.config().sample_time()
     }
 
@@ -509,8 +508,8 @@ mod test_pid_qualitative_performance {
 
                 // Deactivate integration just before the integral term causes the output to hit the limit
                 if i == N_STEPS - 1 {
-                    ctx.set_integrator_activity(IntegratorActivity::Inactive);
-                    assert!(ctx.integrator_activity() == IntegratorActivity::Inactive);
+                    ctx.set_integrator_activity(pid::IntegratorActivity::Inactive);
+                    assert!(ctx.integrator_activity() == pid::IntegratorActivity::Inactive);
                 }
 
                 (output, ctx) =
@@ -518,8 +517,8 @@ mod test_pid_qualitative_performance {
 
                 // Then reactivate integration
                 if i == N_STEPS - 1 {
-                    ctx.set_integrator_activity(IntegratorActivity::Active);
-                    assert!(ctx.integrator_activity() == IntegratorActivity::Active);
+                    ctx.set_integrator_activity(pid::IntegratorActivity::Active);
+                    assert!(ctx.integrator_activity() == pid::IntegratorActivity::Active);
                 }
 
                 assert!(output < limit);
@@ -533,10 +532,11 @@ mod test_pid_qualitative_performance {
 
             // Compute once with the integral active, then manually compute the i-term after this step
             (_, ctx) = pid.compute(ctx, 0.0, 8.0, get_next_timestamp(&pid, &ctx), None);
-            let last_i_term =
-                ctx.error() * pid.config().ki() * pid.config().sample_time().as_secs_f64();
 
-            ctx.set_integrator_activity(IntegratorActivity::HoldIntegration);
+            let error = 8.0;
+            let last_i_term = error * pid.config().ki() * pid.config().sample_time().as_secs_f64();
+
+            ctx.set_integrator_activity(pid::IntegratorActivity::HoldIntegration);
 
             const SETPOINTS: [f64; 5] = [-5.0, 1.0, 0.0, 1.0, 5.0];
             for setpoint in SETPOINTS {
@@ -632,10 +632,8 @@ mod test_pid_qualitative_performance {
                 (expected, ctx) =
                     pid.compute(ctx, input, setpoint, get_next_timestamp(&pid, &ctx), None);
 
-                let error = setpoint - input;
                 // Check that the output is as expected
                 assert_eq!(ctx.output(), expected);
-                assert_eq!(ctx.error(), error);
             }
         }
 
@@ -744,8 +742,12 @@ mod test_pid_qualitative_performance {
         fn test_initialized_start() {
             const STEADY_STATE_MEASURED: f64 = 5.0;
             const STEADY_STATE_DISTURBANCE: f64 = 1.5;
-            let ctx = PidContext::new(Millis(0), STEADY_STATE_MEASURED, STEADY_STATE_DISTURBANCE);
-            let pid = FuncPidController::new(PidConfig::default());
+            let ctx = pid::PidContext::new(
+                time::Millis(0),
+                STEADY_STATE_MEASURED,
+                STEADY_STATE_DISTURBANCE,
+            );
+            let pid = pid::FuncPidController::new(pid::PidConfig::default());
 
             const EXPECTED_ERROR: f64 = 1.5;
             let (output, _) = pid.compute(
@@ -764,12 +766,13 @@ mod test_pid_qualitative_performance {
 }
 
 mod test_stateful_pid {
-    use discrete_pid::pid::PidController;
-
     use super::test_pid::*;
     use super::*;
-    pub fn get_next_timestamp_stateful(pid: &PidController<Millis, f64>) -> Millis {
-        pid.last_time().unwrap_or(Millis(0)) + pid.config().sample_time()
+
+    pub fn get_next_timestamp_stateful(
+        pid: &pid::PidController<time::Millis, f64>,
+    ) -> time::Millis {
+        pid.last_time().unwrap_or(time::Millis(0)) + pid.config().sample_time()
     }
 
     #[test]
@@ -786,10 +789,8 @@ mod test_stateful_pid {
         ] {
             let expected = pid.compute(input, setpoint, get_next_timestamp_stateful(&pid), None);
 
-            let error = setpoint - input;
             // Check that the output is as expected
             assert_eq!(pid.output(), expected);
-            assert_eq!(pid.error(), error);
         }
     }
 
@@ -800,7 +801,7 @@ mod test_stateful_pid {
         // Should be uninitialized initially
         assert!(!pid.is_initialized());
 
-        let timestamp = Millis(0);
+        let timestamp = time::Millis(0);
         let _ = pid.compute(0.0, 1.0, timestamp, None);
 
         // Should be initialized after first compute
@@ -824,24 +825,24 @@ mod test_stateful_pid {
         let mut pid = make_stateful_controller();
 
         let base_error = 2.0;
-        let _ = pid.compute(0.0, base_error, Millis(0), None);
+        let _ = pid.compute(0.0, base_error, time::Millis(0), None);
 
-        pid.set_integrator_activity(IntegratorActivity::HoldIntegration);
-        assert!(pid.integrator_activity() == IntegratorActivity::HoldIntegration);
+        pid.set_integrator_activity(pid::IntegratorActivity::HoldIntegration);
+        assert!(pid.integrator_activity() == pid::IntegratorActivity::HoldIntegration);
 
         const NUM_ITERS: usize = 10;
         let held_output = (0..NUM_ITERS).fold(0.0, |_, _| {
             pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
         });
 
-        pid.set_integrator_activity(IntegratorActivity::Inactive);
-        assert!(pid.integrator_activity() == IntegratorActivity::Inactive);
+        pid.set_integrator_activity(pid::IntegratorActivity::Inactive);
+        assert!(pid.integrator_activity() == pid::IntegratorActivity::Inactive);
         let inactive_output = (0..NUM_ITERS).fold(0.0, |_, _| {
             pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
         });
 
-        pid.set_integrator_activity(IntegratorActivity::Active);
-        assert!(pid.integrator_activity() == IntegratorActivity::Active);
+        pid.set_integrator_activity(pid::IntegratorActivity::Active);
+        assert!(pid.integrator_activity() == pid::IntegratorActivity::Active);
         let active_output = (0..NUM_ITERS).fold(0.0, |_, _| {
             pid.compute(0.0, base_error, get_next_timestamp_stateful(&pid), None)
         });
@@ -862,9 +863,9 @@ mod test_stateful_pid {
     fn test_initialized_start() {
         const STEADY_STATE_MEASURED: f64 = 5.0;
         const STEADY_STATE_DISTURBANCE: f64 = 1.5;
-        let mut pid = PidController::new(
-            PidConfig::default(),
-            Millis(0),
+        let mut pid = pid::PidController::new(
+            pid::PidConfig::default(),
+            time::Millis(0),
             STEADY_STATE_MEASURED,
             STEADY_STATE_DISTURBANCE,
         );

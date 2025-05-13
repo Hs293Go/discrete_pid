@@ -31,26 +31,23 @@ pub fn main() {
         time::Duration,
     };
 
-    use discrete_pid::{
-        pid::{FuncPidController, PidConfigBuilder, PidContext},
-        time::Millis,
-    };
+    use discrete_pid::{pid, time};
 
     const FIXED_STEP_SIZE_MS: u64 = 10;
 
     use discrete_pid::sim;
     use discrete_pid::sim::SignalGenerator;
 
-    let cfg = PidConfigBuilder::default()
+    let cfg = pid::PidConfigBuilder::default()
         .kp(10.0)
         .ki(25.0)
         .kd(10.0)
         .filter_tc(0.01)
         .build()
         .unwrap();
-    let pid = FuncPidController::new(cfg);
+    let pid = pid::FuncPidController::new(cfg);
 
-    let mut ctx = PidContext::new(Millis(0), 0.0, 0.0);
+    let mut ctx = pid::PidContext::new(time::Millis(0), 0.0, 0.0);
 
     let mut state = na::Vector2::<f64>::zeros();
     let mut control: f64;
@@ -67,10 +64,10 @@ pub fn main() {
     let mut setpoints = vec![];
     let mut response = vec![];
 
-    let square = SignalGenerator::new(sim::WaveForm::Square, Millis(0), 0.5, 0.5);
+    let square = SignalGenerator::new(sim::WaveForm::Square, time::Millis(0), 0.5, 0.5);
 
     for _ in 0..1000usize {
-        let last_time = ctx.last_time().unwrap_or(Millis(0));
+        let last_time = ctx.last_time().unwrap_or(time::Millis(0));
         let timestamp = last_time + Duration::from_millis(FIXED_STEP_SIZE_MS);
 
         let setpoint = square.generate(timestamp);

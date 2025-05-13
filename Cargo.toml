@@ -2,8 +2,15 @@
 name = "discrete_pid"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["H S Helson Go"]
+readme = "README.md"
+license = "MIT"
+description = "A correctness-first, no_std-friendly discrete PID controller"
+repository = "https://github.com/Hs293Go/discrete_pid"
+documentation = "https://docs.rs/discrete_pid"
+keywords = ["pid", "control", "no_std", "embedded"]
+categories = ["embedded", "science", "simulation", "no-std", "mathematics"]
+rust-version = "1.65"
 
 [dependencies]
 approx = "0.5.1"

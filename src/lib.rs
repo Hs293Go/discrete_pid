@@ -4,7 +4,7 @@
 //!
 //! This library provides a discrete PID (Proportional-Integral-Derivative) controller in Rust.
 //!
-//! It includes both functional and stateful implementations, allowing users to choose the approach that best suits their needs.
+//! It is designed for embedded systems and real-time applications, prioritizing
 //!
 //! ## Features
 //!
@@ -129,7 +129,7 @@
 //!
 //! ## License
 //!
-#![no_std]
+// #![no_std]
 
 #[cfg(feature = "std")]
 extern crate std;
