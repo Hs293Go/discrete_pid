@@ -75,8 +75,7 @@ pub fn main() {
 
         let setpoint = square.generate(timestamp);
         (control, ctx) = pid.compute(ctx, output, setpoint, timestamp, None);
-        let deriv = mdl.f(state, control);
-        state += deriv * FIXED_STEP_SIZE_S;
+        state = sim::rk4_step(|x| mdl.f(x, control), state, FIXED_STEP_SIZE_S);
         output = mdl.h(state);
 
         timestamps.push(timestamp.0 as f64 / 1000.0);

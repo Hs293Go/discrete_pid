@@ -1,6 +1,18 @@
 use crate::time::{InstantLike, Millis};
 use nalgebra as na;
 
+pub fn rk4_step<const N: usize>(
+    f: impl Fn(na::SVector<f64, N>) -> na::SVector<f64, N>,
+    x0: na::SVector<f64, N>,
+    dt: f64,
+) -> na::SVector<f64, N> {
+    let k1 = f(x0);
+    let k2 = f(x0 + k1 * dt / 2.0);
+    let k3 = f(x0 + k2 * dt / 2.0);
+    let k4 = f(x0 + k3 * dt);
+    x0 + (k1 + k2 * 2.0 + k3 * 2.0 + k4) * dt / 6.0
+}
+
 pub enum WaveForm {
     Sine,
     Square,

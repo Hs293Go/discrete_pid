@@ -22,7 +22,7 @@
 
 #[cfg(feature = "simulation")]
 mod control {
-    use discrete_pid::{pid, time::Millis};
+    use discrete_pid::{pid, sim, time::Millis};
     use nalgebra as na;
 
     #[derive(Debug)]
@@ -113,11 +113,7 @@ mod control {
             // integrator
             #[allow(clippy::toplevel_ref_arg)]
             let x0 = na::stack![qs.position; qs.velocity; qs.body_rate; qs.motor_speeds];
-            let k1 = f(x0);
-            let k2 = f(x0 + dt * k1 / 2.0);
-            let k3 = f(x0 + dt * k2 / 2.0);
-            let k4 = f(x0 + dt * k3);
-            let x = x0 + dt * ((k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0);
+            let x = sim::rk4_step(f, x0, dt);
             qs.position.copy_from(&x.fixed_rows::<3>(0));
             let updated_body_rate = x.fixed_rows::<3>(6);
 
