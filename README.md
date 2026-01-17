@@ -13,10 +13,18 @@ A PID controller for robotics and discrete control systems in rust.
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | ![Step Response](https://raw.githubusercontent.com/Hs293Go/discrete_pid/refs/heads/main/media/step_response.png) | ![Quadrotor Control](https://raw.githubusercontent.com/Hs293Go/discrete_pid/refs/heads/main/media/quadrotor_control.png) |
 
+## LLM Disclaimer
+
+This project was initially written with the assistance of AI language models,
+mostly GPT-40 around May 2025. AI was invaluable in helping me overcome the
+learning curve of Rust, and proverbially _beat the borrow checker_. However,
+most testing, benchmarking, and ensuring **compliance with Simulink's PID block
+behavior**, were carefully done by myself. No AI was capable of vibe-coding
+Simulink blocks after all.
+
 ## Why This PID?
 
 - **Principled and Reliable**
-
   - **Inspired** by Brett Beauregard's battle-tested and well documented[^1]
     [PID for Arduino](https://github.com/br3ttb/Arduino-PID-Library)
   - Verified in an extensive test suite, including numerical verification
@@ -26,7 +34,6 @@ A PID controller for robotics and discrete control systems in rust.
     **perfectly reproducible** control outputs and easy thread-safety
 
 - **Real-World Ready**
-
   - Explicitly designed for discrete-time control --- supports variable **sample
     time** and tunable **LPF on derivative**.
   - Supports fine-grained control over PID activity: online (de)activation,
@@ -35,7 +42,6 @@ A PID controller for robotics and discrete control systems in rust.
     controller is competitive with the naive PID law in terms of speed
 
 - **Lightweight and Dependency-Free**
-
   - Usage in `#![no_std]` mode only requires core float traits from `num_traits`
 
 ## Application Example
@@ -55,9 +61,9 @@ cargo run --example quadrotor_control --features simulation
 Visualize the results:
 
 ```sh
-python3 examples/plot_quadrotor_trajectory.py         # Generates static plot
-python3 examples/plot_quadrotor_trajectory.py --animate show  # Live 3D animation
-python3 examples/plot_quadrotor_trajectory.py --animate save  # Save to GIF
+python3 examples/plot_quadrotor_trajectory.py                # Generates static plot
+python3 examples/plot_quadrotor_trajectory.py --animate show # Live 3D animation
+python3 examples/plot_quadrotor_trajectory.py --animate save # Save to GIF
 ```
 
 In this example, we used our PID controller to track quadrotor body rates
@@ -96,7 +102,6 @@ let (output, new_ctx) =
 
 - [`pid-rs`](https://crates.io/crates/pid): well-known and effective; You may
   consider using their crate instead if you:
-
   1. Are working with simple, slow-acting processes that don't benefit from
      sample time handling and D-term filtering
 
@@ -113,7 +118,6 @@ let (output, new_ctx) =
 - [`pidgeon`](https://github.com/security-union/pidgeon/tree/main): Strong
   support for synchronization and built-in visualization; You may consider using
   their crate instead if you:
-
   1. Need support for concurrent PID control and don't mind depending on `std`
      through `std::sync::Mutex`
 
