@@ -22,6 +22,7 @@ rust-version = "1.65"
 num-traits = { version = "0.2.19", default-features = false }
 nalgebra = { version = "0.33.2", optional = true }
 thiserror = { version = "2.0.12", optional = true }
+rerun = { version = "^0.28", features = ["sdk"], optional = true }
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -30,7 +31,7 @@ criterion = "0.5"
 [features]
 default = ["std"]
 std = ["dep:thiserror"]
-simulation = ["nalgebra", "std"]
+simulation = ["nalgebra", "std", "dep:rerun"]
 
 [[bench]]
 name = "pid_benchmark"

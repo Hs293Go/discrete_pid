@@ -24,12 +24,25 @@
 pub fn main() {
     use nalgebra as na;
 
-    use std::{
-        fs::{create_dir_all, File},
-        io::Write,
-        path::Path,
-        time::Duration,
-    };
+    use std::time::Duration;
+
+    let rec = rerun::RecordingStreamBuilder::new("step_response")
+        .spawn()
+        .unwrap();
+    rec.log_static(
+        "setpoint",
+        &rerun::SeriesLines::new()
+            .with_colors([[0, 255, 0]])
+            .with_widths([2.0]),
+    )
+    .unwrap();
+    rec.log_static(
+        "output",
+        &rerun::SeriesLines::new()
+            .with_colors([[255, 0, 0]])
+            .with_widths([2.0]),
+    )
+    .unwrap();
 
     use discrete_pid::{
         pid::{FuncPidController, PidConfigBuilder, PidContext},
@@ -64,8 +77,6 @@ pub fn main() {
     const FIXED_STEP_SIZE_S: f64 = FIXED_STEP_SIZE_MS as f64 * 0.001;
 
     let mut timestamps = vec![];
-    let mut setpoints = vec![];
-    let mut response = vec![];
 
     let square = SignalGenerator::new(sim::WaveForm::Square, Millis(0), 0.5, 0.5);
 
@@ -79,20 +90,10 @@ pub fn main() {
         output = mdl.h(state);
 
         timestamps.push(timestamp.0 as f64 / 1000.0);
-        setpoints.push(setpoint);
-        response.push(output);
-    }
-
-    let output_filename = Path::new("output/step_response.csv");
-    println!("Writing results to {}", output_filename.display());
-    if let Some(parent) = output_filename.parent() {
-        create_dir_all(parent)
-            .expect("Incorrect directory structure in example. Notify developer.");
-    }
-    let mut file = File::create(output_filename).expect("Failed to create file");
-    writeln!(file, "time,p,sp").expect("Failed to write header");
-    for ((time, p), sp) in timestamps.iter().zip(response.iter()).zip(setpoints.iter()) {
-        writeln!(file, "{},{},{}", time, p, sp).expect("Failed to write data");
+        rec.set_time("sim_time", Duration::from_millis(timestamp.0));
+        rec.log("setpoint", &rerun::Scalars::single(setpoint))
+            .unwrap();
+        rec.log("output", &rerun::Scalars::single(output)).unwrap();
     }
 }
 

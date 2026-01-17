@@ -240,12 +240,73 @@ mod simulation {
     use control::*;
     use discrete_pid::{pid, time};
     use nalgebra as na;
+    use rerun::archetypes;
     use std::f64;
-    use std::fs::{create_dir_all, File};
+    use std::path::Path;
     use std::time::Duration;
 
-    use std::io::Write;
-    use std::path::Path;
+    const AXES: [&str; 3] = ["x", "y", "z"];
+    pub fn setup_rerun() -> rerun::RecordingStreamResult<rerun::RecordingStream> {
+        let rec = rerun::RecordingStreamBuilder::new("quadrotor_sim").spawn()?;
+        let rb_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("quadrotor_sim.rbl");
+        rec.log_file_from_path(rb_path, None, false).unwrap();
+
+        // Log static waypoints once
+        let viz_points = archetypes::Points3D::new(
+            TARGET_POSITIONS
+                .iter()
+                .map(|pos| pos.cast::<f32>())
+                .map(|pos| [pos.x, pos.y, pos.z]),
+        );
+        rec.log(
+            "world/waypoints",
+            &viz_points
+                .with_radii([0.1])
+                .with_colors([rerun::Color::from_rgb(255, 0, 0)]),
+        )?;
+        rec.log(
+            "world/drone",
+            &rerun::Arrows3D::default()
+                .with_vectors([(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)])
+                .with_colors([
+                    rerun::Color::from_rgb(255, 0, 0),
+                    rerun::Color::from_rgb(0, 255, 0),
+                    rerun::Color::from_rgb(0, 0, 255),
+                ]),
+        )?;
+
+        for ax in AXES {
+            rec.log_static(
+                format!("{ax}_performance/response"),
+                &rerun::SeriesLines::new()
+                    .with_colors([[255, 0, 0]])
+                    .with_names([format!("{ax} response")])
+                    .with_widths([2.0]),
+            )?;
+            rec.log_static(
+                format!("{ax}_performance/setpoint"),
+                &rerun::SeriesLines::new()
+                    .with_colors([[0, 255, 0]])
+                    .with_names([format!("{ax} setpoint")])
+                    .with_widths([2.0]),
+            )?;
+        }
+
+        for ax in AXES {
+            rec.log_static(
+                format!("{ax}_error"),
+                &rerun::SeriesLines::new()
+                    .with_colors([[0, 0, 255]])
+                    .with_names([format!("{ax} error")])
+                    .with_widths([2.0]),
+            )?;
+        }
+
+        Ok(rec)
+    }
+
     pub fn make_controllers() -> (QuadrotorSimulator, GeometricController, RateController) {
         const QUAD_MASS: f64 = 1.0;
 
@@ -312,18 +373,12 @@ mod simulation {
     const RADIUS_OF_ACCEPTANCE: f64 = 0.1;
     const MAX_NUM_STEPS: i32 = 5000;
 
-    pub struct SimOut {
-        tout: Vec<f64>,
-        position: Vec<na::Vector3<f64>>,
-        rate_setpoint: Vec<na::Vector3<f64>>,
-        body_rate: Vec<na::Vector3<f64>>,
-    }
-
     pub fn run_simulation(
         quad: QuadrotorSimulator,
         geometric_controller: GeometricController,
         rate_controller: RateController,
-    ) -> SimOut {
+        rec: &rerun::RecordingStream,
+    ) {
         let mut rate_control_ctx = RateControllerContext::new();
         const STEP_SIZE: f64 = 0.01; // Just use the default PID step size
         const SIM_STEPS_PER_CONTROL_STEP: i32 = 10; // Update the dynamics at 10x the control rate
@@ -340,13 +395,7 @@ mod simulation {
             motor_speeds: na::Vector4::zeros(),
         };
 
-        let mut out = SimOut {
-            tout: vec![0.0],
-            position: vec![INITIAL_POSITION],
-            rate_setpoint: vec![na::Vector3::zeros()],
-            body_rate: vec![na::Vector3::zeros()],
-        };
-
+        let mut path_points = Vec::new();
         // TODO: Readers may run this simulation with separate threads for the quadrotor simulators
         // and inner/outer loop controllers. This is a good opportunity to demonstrate how easily
         // our functionally pure controllers can be parallelized
@@ -396,55 +445,48 @@ mod simulation {
                     break;
                 }
             }
-            out.tout.push(timestamp.0 as f64 / 1e3);
-            out.position.push(quad_state.position);
-            out.rate_setpoint.push(rate_setpoint);
-            out.body_rate.push(quad_state.body_rate);
-        }
-        out
-    }
-
-    pub fn write_results(simulation_hist: SimOut) {
-        let output_filename = Path::new("output/quadrotor_trajectory.csv");
-        println!("Writing results to {}", output_filename.display());
-        if let Some(parent) = output_filename.parent() {
-            create_dir_all(parent)
-                .expect("Incorrect directory structure in example. Notify developer.");
-        }
-        let mut file = File::create(output_filename).expect("Failed to create file");
-        writeln!(file, "type,time,x,y,z,pd,qd,rd,p,q,r").expect("Failed to write header");
-        TARGET_POSITIONS.iter().for_each(|vec| {
-            writeln!(
-                file,
-                "target,{},{},{},{},NaN,NaN,NaN,NaN,NaN,NaN",
-                -1.0, vec.x, vec.y, vec.z
+            let pos = quad_state.position.cast::<f32>();
+            path_points.push(rerun::Vec3D([pos.x, pos.y, pos.z]));
+            let q = quad_state.orientation.coords.cast::<f32>();
+            rec.set_time("sim_time", Duration::from_millis(timestamp.0));
+            rec.log(
+                "world/drone",
+                &archetypes::Transform3D::from_translation_rotation(
+                    [pos.x, pos.y, pos.z],
+                    rerun::Rotation3D::Quaternion(rerun::components::RotationQuat(
+                        rerun::Quaternion::from_xyzw([q.x, q.y, q.z, q.w]),
+                    )),
+                ),
             )
-            .expect("Failed to write to file");
-        });
+            .unwrap();
 
-        simulation_hist
-            .tout
-            .iter()
-            .zip(simulation_hist.position.iter())
-            .zip(simulation_hist.rate_setpoint.iter())
-            .zip(simulation_hist.body_rate.iter())
-            .for_each(|(((t, pos), rate_setpoint), body_rate)| {
-                writeln!(
-                    file,
-                    "output,{},{},{},{},{},{},{},{},{},{}",
-                    t,
-                    pos.x,
-                    pos.y,
-                    pos.z,
-                    rate_setpoint.x,
-                    rate_setpoint.y,
-                    rate_setpoint.z,
-                    body_rate.x,
-                    body_rate.y,
-                    body_rate.z
+            rec.log(
+                "world/drone_path",
+                &rerun::LineStrips3D::default()
+                    .with_strips([rerun::LineStrip3D(path_points.clone())]),
+            )
+            .unwrap();
+
+            for (i, ax) in AXES.iter().enumerate() {
+                rec.log(
+                    format!("{ax}_performance/response"),
+                    &rerun::Scalars::single(quad_state.body_rate[i]),
                 )
-                .expect("Failed to write to file");
-            });
+                .unwrap();
+
+                rec.log(
+                    format!("{ax}_performance/setpoint"),
+                    &rerun::Scalars::single(rate_setpoint[i]),
+                )
+                .unwrap();
+
+                rec.log(
+                    format!("{ax}_error"),
+                    &rerun::Scalars::single(quad_state.body_rate[i] - rate_setpoint[i]),
+                )
+                .unwrap();
+            }
+        }
     }
 }
 
@@ -452,9 +494,8 @@ mod simulation {
 pub fn main() {
     let (quad, geometric_controller, rate_controller) = simulation::make_controllers();
 
-    let simulation_hist = simulation::run_simulation(quad, geometric_controller, rate_controller);
-
-    simulation::write_results(simulation_hist);
+    let rec = simulation::setup_rerun().unwrap();
+    simulation::run_simulation(quad, geometric_controller, rate_controller, &rec);
 }
 
 #[cfg(not(feature = "simulation"))]
