@@ -20,9 +20,11 @@
 // OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 use crate::time::InstantLike;
-
 use core::time::Duration;
 use num_traits::float::FloatCore;
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
 use thiserror::Error;
@@ -122,6 +124,7 @@ pub enum PidConfigError {
 /// config.set_output_limits(-10.0, 10.0);
 /// ```
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PidConfig<F: FloatCore> {
     kp: F,                               // Proportional gain coefficient.
     ki: F,                               // Integral gain coefficient,
@@ -596,6 +599,7 @@ impl<F: FloatCore> PidConfigBuilder<F> {
 ///   disturbances present in that region only)
 /// - [`Active`](IntegratorActivity::Active) when the aircraft is under autopilot control and above the altitude threshold
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum IntegratorActivity {
     /// The integrator is disabled and the i-term set to zero
     Inactive,
@@ -897,6 +901,7 @@ impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidController<T, F> {
 /// ctx.deactivate(); // Deactivate the PID controller for the next computation
 /// ```
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PidContext<T: InstantLike, F: FloatCore> {
     /// Backing data of the PidAlgorithm trait
     i_term: F,

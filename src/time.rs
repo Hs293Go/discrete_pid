@@ -90,6 +90,14 @@ pub trait InstantLike: Copy {
     /// Returns the amount of time elapsed from another instant to this one
     #[must_use]
     fn duration_since(&self, earlier: Self) -> Duration;
+
+    /// Serialize to a primitive form (e.g. micros since boot)
+    #[cfg(feature = "serde")]
+    fn to_u64(&self) -> u64;
+
+    /// Deserialize from primitive (inverse of `to_u64`)
+    #[cfg(feature = "serde")]
+    fn from_u64(micros: u64) -> Self;
 }
 
 /// A wrapper around an unsigned 64-bit integer representing milliseconds
