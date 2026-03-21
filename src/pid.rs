@@ -20,6 +20,9 @@
 // OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 use crate::time::InstantLike;
+use air_filters::iir::pt1::{Pt1Filter, Pt1FilterContext};
+use air_filters::{CommonFilterConfig, Filter, FuncFilter};
+use num_traits::FloatConst;
 
 use core::time::Duration;
 use num_traits::float::FloatCore;
@@ -132,7 +135,6 @@ pub struct PidConfig<F: FloatCore> {
     output_max: F,                       // Maximum output value of the PID controller, can be +inf
     use_strict_causal_integrator: bool,  // Whether to use a strict causal integrator.
     use_derivative_on_measurement: bool, // Whether to apply the derivative on the measurement.
-    smoothing_constant: F,               // Smoothing constant for the LPF on the derivative term.
 }
 
 fn check_kp<F: FloatCore>(kp: F) -> Result<(), PidConfigError> {
@@ -202,7 +204,6 @@ impl<F: FloatCore> Default for PidConfig<F> {
             output_max: F::infinity(),
             use_strict_causal_integrator: false,
             use_derivative_on_measurement: false,
-            smoothing_constant: F::from(0.5).unwrap(),
         }
     }
 }
@@ -328,8 +329,6 @@ impl<F: FloatCore> PidConfig<F> {
     /// - `Err(PidConfigError::InvalidFilterTimeConstant)` if `filter_tc <= 0` or not finite.
     pub fn set_filter_tc(&mut self, filter_tc: F) -> Result<(), PidConfigError> {
         check_filter_tc(filter_tc)?;
-        let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
-        self.smoothing_constant = delta_t / (delta_t + filter_tc);
         self.filter_tc = filter_tc;
         Ok(())
     }
@@ -352,9 +351,6 @@ impl<F: FloatCore> PidConfig<F> {
 
         self.ki = self.ki * ratio;
         self.kd = self.kd / ratio;
-
-        let delta_t = F::from(sample_time.as_secs_f64()).unwrap();
-        self.smoothing_constant = delta_t / (delta_t + self.filter_tc);
 
         self.sample_time = sample_time;
         Ok(())
@@ -560,7 +556,6 @@ impl<F: FloatCore> PidConfigBuilder<F> {
         check_output_limits(self.output_min, self.output_max)?;
 
         let delta_t = F::from(self.sample_time.as_secs_f64()).unwrap();
-        let smoothing_constant = delta_t / (delta_t + self.filter_tc);
 
         Ok(PidConfig {
             kp: self.kp,
@@ -572,7 +567,6 @@ impl<F: FloatCore> PidConfigBuilder<F> {
             output_max: self.output_max,
             use_strict_causal_integrator: self.use_strict_causal_integrator,
             use_derivative_on_measurement: self.use_derivative_on_measurement,
-            smoothing_constant,
         })
     }
 }
@@ -616,18 +610,12 @@ pub enum IntegratorActivity {
 trait PidAlgorithm<F: FloatCore> {
     fn i_term(&self) -> F;
 
-    fn prev_error(&self) -> F;
-
-    fn prev_input(&self) -> F;
-
-    fn prev_derivative(&self) -> F;
-
     #[must_use]
     fn eval_pid(
-        &self,
+        &mut self,
         config: &PidConfig<F>,
         error: F,
-        input: F,
+        filtered_derivative: F,
         feedforward: F,
         integrator_activity: IntegratorActivity,
     ) -> (F, F, F) {
@@ -635,28 +623,15 @@ trait PidAlgorithm<F: FloatCore> {
         if !config.use_strict_causal_integrator {
             i_term = self.compute_i_term(config, error, integrator_activity);
         }
-        // Optional derivative on measurement to mitigate derivative kick
-        let raw_derivative = if config.use_derivative_on_measurement {
-            // Note reversed order of operands: Derivative on measurement operated by assuming
-            // setpoints are piecewise constant (with zero derivative), allowing the rewrite
-            //
-            // d/dt(error) = d/dt(s̵e̵t̵p̵o̵i̵n̵t̵ - input) = -d/dt(input)
-            self.prev_input() - input
-        } else {
-            error - self.prev_error()
-        };
 
-        // Pass the derivative through a first-order LPF
-        let derivative = config.smoothing_constant * raw_derivative
-            + (F::one() - config.smoothing_constant) * self.prev_derivative();
-
-        let mut output = config.kp * error + i_term + config.kd * derivative + feedforward;
+        // Pass the pre-filtered derivative through to the output
+        let mut output = config.kp * error + i_term + config.kd * filtered_derivative + feedforward;
         output = output.clamp(config.output_min, config.output_max);
 
         if config.use_strict_causal_integrator {
             i_term = self.compute_i_term(config, error, integrator_activity);
         }
-        (output, i_term, derivative)
+        (output, i_term, filtered_derivative)
     }
 
     #[must_use]
@@ -707,12 +682,17 @@ pub struct PidController<T: InstantLike, F: FloatCore> {
     integrator_activity: IntegratorActivity,
 
     config: PidConfig<F>,
+    filter: Pt1Filter<F>,
 }
 
-impl<T: InstantLike, F: FloatCore> PidController<T, F> {
+impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
     /// Creates a new PID controller with the given configuration without initializing working
     /// variables
     pub fn new_uninit(config: PidConfig<F>) -> Self {
+        let mut cfg = CommonFilterConfig::new();
+        let _ = cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()));
+        let _ = cfg
+            .set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap());
         Self {
             i_term: F::zero(),
             prev_err: F::zero(),
@@ -724,12 +704,19 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
             integrator_activity: IntegratorActivity::Active,
             is_initialized: false,
             config,
+            filter: Pt1Filter::new(cfg),
         }
     }
 
     /// Creates a new PID controller with the given configuration and initializes the working
     /// variables. Refer to [`PidContext::new`] for details on the initialization logic.
     pub fn new(config: PidConfig<F>, timestamp: T, input: F, output: F) -> Self {
+        let mut cfg = CommonFilterConfig::new();
+
+        cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()))
+            .expect("Invalid filter time constant; This should have been caught by PidConfig validation");
+        cfg.set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap())
+            .expect("Invalid sample time; This should have been caught by PidConfig validation");
         Self {
             i_term: output.clamp(config.output_min, config.output_max),
             prev_err: F::zero(),
@@ -741,6 +728,7 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
             integrator_activity: IntegratorActivity::Active,
             is_initialized: true,
             config,
+            filter: Pt1Filter::new(cfg),
         }
     }
 
@@ -795,8 +783,20 @@ impl<T: InstantLike, F: FloatCore> PidController<T, F> {
         }
 
         let ff = feedforward.unwrap_or(F::zero());
+
+        // Compute raw derivative and pass it through the owned Pt1Filter
+        let raw_deriv = if self.config.use_derivative_on_measurement {
+            self.prev_input - input
+        } else {
+            error - self.prev_err
+        };
+        let filtered_deriv = self.filter.apply(raw_deriv);
+
+        // Copy the Copy fields out before the &mut self borrow from eval_pid
+        let config = self.config;
+        let integrator_activity = self.integrator_activity;
         (self.output, self.i_term, self.prev_derivative) =
-            self.eval_pid(&self.config, error, input, ff, self.integrator_activity);
+            self.eval_pid(&config, error, filtered_deriv, ff, integrator_activity);
 
         self.prev_err = error;
         self.prev_input = input;
@@ -866,18 +866,6 @@ impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidController<T, F> {
     fn i_term(&self) -> F {
         self.i_term
     }
-
-    fn prev_error(&self) -> F {
-        self.prev_err
-    }
-
-    fn prev_input(&self) -> F {
-        self.prev_input
-    }
-
-    fn prev_derivative(&self) -> F {
-        self.prev_derivative
-    }
 }
 
 /// A container for mutable state and runtime parameters of PID controllers.
@@ -903,6 +891,10 @@ pub struct PidContext<T: InstantLike, F: FloatCore> {
     prev_err: F,
     prev_input: F,
     prev_derivative: F,
+
+    /// State of the PT1 low-pass filter applied to the D-term. Stored as a `Pt1FilterContext` so
+    /// that `PidContext` remains `Copy` while using the typed `air-filters` context API.
+    filter_ctx: Pt1FilterContext<F>,
 
     /// For managing PID runtime behavior
     output: F,
@@ -942,6 +934,7 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
             prev_err: F::zero(),
             prev_input: input,
             prev_derivative: F::zero(),
+            filter_ctx: Pt1FilterContext::default(),
             output,
             last_time: Some(timestamp),
             is_active: true,
@@ -1015,6 +1008,7 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
             prev_err: F::zero(),
             prev_input: F::zero(),
             prev_derivative: F::zero(),
+            filter_ctx: Pt1FilterContext::default(),
             output: F::zero(),
             last_time: None,
             is_active: true,
@@ -1027,18 +1021,6 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
 impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidContext<T, F> {
     fn i_term(&self) -> F {
         self.i_term
-    }
-
-    fn prev_error(&self) -> F {
-        self.prev_err
-    }
-
-    fn prev_input(&self) -> F {
-        self.prev_input
-    }
-
-    fn prev_derivative(&self) -> F {
-        self.prev_derivative
     }
 }
 
@@ -1070,17 +1052,27 @@ impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidContext<T, F> {
 ///
 pub struct FuncPidController<F: FloatCore> {
     config: PidConfig<F>,
+    filter: Pt1Filter<F>,
 }
 
-impl<F: FloatCore> FuncPidController<F> {
+impl<F: FloatCore + FloatConst> FuncPidController<F> {
     /// Creates a new `FuncPidController` instance with the given configuration.
     ///
     /// # Arguments
     /// - `config`: The PID configuration.
     pub fn new(config: PidConfig<F>) -> Self {
-        FuncPidController { config }
+        let mut cfg = CommonFilterConfig::new();
+        let _ = cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()));
+        let _ = cfg
+            .set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap());
+        FuncPidController {
+            filter: Pt1Filter::new(cfg),
+            config,
+        }
     }
+}
 
+impl<F: FloatCore> FuncPidController<F> {
     /// Returns the PID configuration.
     pub fn config(&self) -> &PidConfig<F> {
         &self.config
@@ -1140,8 +1132,23 @@ impl<F: FloatCore> FuncPidController<F> {
         }
 
         let ff = feedforward.unwrap_or(F::zero());
-        (ctx.output, ctx.i_term, ctx.prev_derivative) =
-            ctx.eval_pid(&self.config, error, input, ff, ctx.integrator_activity);
+
+        let raw_deriv = if self.config.use_derivative_on_measurement {
+            ctx.prev_input - input
+        } else {
+            error - ctx.prev_err
+        };
+        let (filtered_deriv, new_filter_ctx) =
+            self.filter.apply_stateless(raw_deriv, &ctx.filter_ctx);
+        ctx.filter_ctx = new_filter_ctx;
+
+        (ctx.output, ctx.i_term, ctx.prev_derivative) = ctx.eval_pid(
+            &self.config,
+            error,
+            filtered_deriv,
+            ff,
+            ctx.integrator_activity,
+        );
         ctx.prev_input = input;
         ctx.prev_err = error;
         ctx.last_time = Some(timestamp);
