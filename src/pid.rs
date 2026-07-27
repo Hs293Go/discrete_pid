@@ -601,6 +601,66 @@ pub enum IntegratorActivity {
     Active,
 }
 
+/// Per-call modifiers: gain scaling (TPA, D_min, anti-gravity) and directional
+/// anti-windup. Defaults are neutral, so `compute(..)` equals
+/// `compute_with_modifiers(.., &PidModifiers::default())`.
+#[derive(Copy, Clone, Debug)]
+pub struct PidModifiers<F> {
+    /// P-gain scale.
+    pub p_scale: F,
+    /// D-gain scale.
+    pub d_scale: F,
+    /// I-increment scale.
+    pub i_scale: F,
+    /// Admit positive integral growth; clear when saturated high.
+    pub allow_integral_increase: bool,
+    /// Admit negative integral growth; clear when saturated low.
+    pub allow_integral_decrease: bool,
+}
+
+impl<F: FloatCore> Default for PidModifiers<F> {
+    fn default() -> Self {
+        Self {
+            p_scale: F::one(),
+            d_scale: F::one(),
+            i_scale: F::one(),
+            allow_integral_increase: true,
+            allow_integral_decrease: true,
+        }
+    }
+}
+
+/// Decomposed PID output for logging/tuning.
+#[derive(Copy, Clone, Debug)]
+pub struct PidTerms<F> {
+    /// Proportional term.
+    pub p: F,
+    /// Integral term used in this step's output.
+    pub i: F,
+    /// Derivative term.
+    pub d: F,
+    /// Feedforward term.
+    pub ff: F,
+}
+
+impl<F: FloatCore> PidTerms<F> {
+    /// Pre-clamp sum of the terms (may exceed the output limits).
+    pub fn output(&self) -> F {
+        self.p + self.i + self.d + self.ff
+    }
+}
+
+impl<F: FloatCore> Default for PidTerms<F> {
+    fn default() -> Self {
+        Self {
+            p: F::zero(),
+            i: F::zero(),
+            d: F::zero(),
+            ff: F::zero(),
+        }
+    }
+}
+
 /// INTERNAL: This is the trait that implements the core PID law via the `eval_pid` methods.
 ///
 /// This PID law is not aware of initialization, early-return, or error checking. It is
@@ -618,20 +678,29 @@ trait PidAlgorithm<F: FloatCore> {
         filtered_derivative: F,
         feedforward: F,
         integrator_activity: IntegratorActivity,
-    ) -> (F, F, F) {
+        mods: &PidModifiers<F>,
+    ) -> (F, F, F, PidTerms<F>) {
         let mut i_term = self.i_term();
         if !config.use_strict_causal_integrator {
-            i_term = self.compute_i_term(config, error, integrator_activity);
+            i_term = self.compute_i_term(config, error, integrator_activity, mods);
         }
 
-        // Pass the pre-filtered derivative through to the output
-        let mut output = config.kp * error + i_term + config.kd * filtered_derivative + feedforward;
-        output = output.clamp(config.output_min, config.output_max);
+        // Scaled P/D (TPA etc.); the pre-filtered derivative passes straight through.
+        let p = mods.p_scale * config.kp * error;
+        let d = mods.d_scale * config.kd * filtered_derivative;
+        let i_used = i_term; // i-term contributing to this output
+        let output = (p + i_term + d + feedforward).clamp(config.output_min, config.output_max);
 
         if config.use_strict_causal_integrator {
-            i_term = self.compute_i_term(config, error, integrator_activity);
+            i_term = self.compute_i_term(config, error, integrator_activity, mods);
         }
-        (output, i_term, filtered_derivative)
+        let terms = PidTerms {
+            p,
+            i: i_used,
+            d,
+            ff: feedforward,
+        };
+        (output, i_term, filtered_derivative, terms)
     }
 
     #[must_use]
@@ -640,12 +709,21 @@ trait PidAlgorithm<F: FloatCore> {
         config: &PidConfig<F>,
         error: F,
         integrator_activity: IntegratorActivity,
+        mods: &PidModifiers<F>,
     ) -> F {
         match integrator_activity {
             IntegratorActivity::Inactive => F::zero(),
             IntegratorActivity::HoldIntegration => self.i_term(),
             IntegratorActivity::Active => {
-                (self.i_term() + config.ki * error).clamp(config.output_min, config.output_max)
+                // Directional gating: drop increments that push further into saturation.
+                let mut delta = mods.i_scale * config.ki * error;
+                if delta > F::zero() && !mods.allow_integral_increase {
+                    delta = F::zero();
+                }
+                if delta < F::zero() && !mods.allow_integral_decrease {
+                    delta = F::zero();
+                }
+                (self.i_term() + delta).clamp(config.output_min, config.output_max)
             }
         }
     }
@@ -673,6 +751,7 @@ pub struct PidController<T: InstantLike, F: FloatCore> {
     prev_err: F,
     prev_input: F,
     prev_derivative: F,
+    terms: PidTerms<F>,
 
     /// For managing PID runtime behavior
     output: F,
@@ -698,6 +777,7 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
             prev_err: F::zero(),
             prev_input: F::zero(),
             prev_derivative: F::zero(),
+            terms: PidTerms::default(),
             output: F::zero(),
             last_time: None,
             is_active: true,
@@ -722,6 +802,7 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
             prev_err: F::zero(),
             prev_input: input,
             prev_derivative: F::zero(),
+            terms: PidTerms::default(),
             output: output.clamp(config.output_min, config.output_max),
             last_time: Some(timestamp),
             is_active: true,
@@ -755,17 +836,44 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
     /// # Returns
     /// - The computed output of the PID controller.
     pub fn compute(&mut self, input: F, setpoint: F, timestamp: T, feedforward: Option<F>) -> F {
+        self.compute_with_modifiers(
+            input,
+            setpoint,
+            timestamp,
+            feedforward,
+            &PidModifiers::default(),
+        )
+    }
+
+    /// Computes the PID control output based on the given input, setpoint, timestamp, optional
+    /// feedforward and per-call [`PidModifiers`]. This allows you to apply gain scaling (TPA,
+    /// D_min, anti-gravity) and directional anti-windup.
+    ///
+    /// # Arguments
+    /// - `input`: The current process variable (PV) or input value.
+    /// - `setpoint`: The desired setpoint or target value.
+    /// - `timestamp`: The current timestamp.
+    /// - `feedforward`: An optional feedforward term to be added to the output.
+    /// - `mods`: Per-call modifiers for gain scaling and directional anti-windup.
+    ///
+    /// # Returns
+    /// - The computed output of the PID controller.
+    pub fn compute_with_modifiers(
+        &mut self,
+        input: F,
+        setpoint: F,
+        timestamp: T,
+        feedforward: Option<F>,
+        mods: &PidModifiers<F>,
+    ) -> F {
         if !self.is_active {
             return self.output;
         }
 
         let error = setpoint - input;
 
-        // If the PID controller is just switched active or has never been run before (last_time is
-        // None), initialize the state then run the controller without checking if the sample time
-        // has elapsed
+        // First run / just re-activated: seed state, skip the sample-time gate.
         if !self.is_initialized {
-            // Initialize only i-term and input/error for d-term calculation
             self.prev_input = input;
             self.prev_err = error;
             self.i_term = self.output;
@@ -774,8 +882,6 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
                 .clamp(self.config.output_min, self.config.output_max);
             self.is_initialized = true;
         } else {
-            // If there is no need to initialize and the controller has been called before, check if the
-            // time delta is less than the sample time
             let time_delta = timestamp.duration_since(self.last_time.unwrap());
             if time_delta < self.config.sample_time {
                 return self.output;
@@ -784,7 +890,6 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
 
         let ff = feedforward.unwrap_or(F::zero());
 
-        // Compute raw derivative and pass it through the owned Pt1Filter
         let raw_deriv = if self.config.use_derivative_on_measurement {
             self.prev_input - input
         } else {
@@ -795,8 +900,14 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
         // Copy the Copy fields out before the &mut self borrow from eval_pid
         let config = self.config;
         let integrator_activity = self.integrator_activity;
-        (self.output, self.i_term, self.prev_derivative) =
-            self.eval_pid(&config, error, filtered_deriv, ff, integrator_activity);
+        (self.output, self.i_term, self.prev_derivative, self.terms) = self.eval_pid(
+            &config,
+            error,
+            filtered_deriv,
+            ff,
+            integrator_activity,
+            mods,
+        );
 
         self.prev_err = error;
         self.prev_input = input;
@@ -860,6 +971,11 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
 
         self.integrator_activity = activity;
     }
+
+    /// Decomposed terms of the last computed output.
+    pub fn terms(&self) -> PidTerms<F> {
+        self.terms
+    }
 }
 
 impl<T: InstantLike, F: FloatCore> PidAlgorithm<F> for PidController<T, F> {
@@ -891,6 +1007,7 @@ pub struct PidContext<T: InstantLike, F: FloatCore> {
     prev_err: F,
     prev_input: F,
     prev_derivative: F,
+    terms: PidTerms<F>,
 
     /// State of the PT1 low-pass filter applied to the D-term. Stored as a `Pt1FilterContext` so
     /// that `PidContext` remains `Copy` while using the typed `air-filters` context API.
@@ -934,6 +1051,7 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
             prev_err: F::zero(),
             prev_input: input,
             prev_derivative: F::zero(),
+            terms: PidTerms::default(),
             filter_ctx: Pt1FilterContext::default(),
             output,
             last_time: Some(timestamp),
@@ -999,6 +1117,11 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
 
         self.integrator_activity = activity;
     }
+
+    /// Decomposed terms of the last computed output.
+    pub fn terms(&self) -> PidTerms<F> {
+        self.terms
+    }
 }
 
 impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
@@ -1008,6 +1131,7 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
             prev_err: F::zero(),
             prev_input: F::zero(),
             prev_derivative: F::zero(),
+            terms: PidTerms::default(),
             filter_ctx: Pt1FilterContext::default(),
             output: F::zero(),
             last_time: None,
@@ -1098,11 +1222,43 @@ impl<F: FloatCore> FuncPidController<F> {
     /// - A tuple containing the computed output and the updated PID context.
     pub fn compute<T: InstantLike>(
         &self,
+        ctx: PidContext<T, F>,
+        input: F,
+        setpoint: F,
+        timestamp: T,
+        feedforward: Option<F>,
+    ) -> (F, PidContext<T, F>) {
+        self.compute_with_modifiers(
+            ctx,
+            input,
+            setpoint,
+            timestamp,
+            feedforward,
+            &PidModifiers::default(),
+        )
+    }
+
+    /// Computes the PID control output based on the given input, setpoint, and timestamp, optional
+    /// feedforward and per-call [`PidModifiers`].
+    ///
+    /// # Arguments
+    /// - `ctx`: The PID context containing the current state of the controller.
+    /// - `input`: The current process variable (PV) or input value.
+    /// - `setpoint`: The desired setpoint or target value.
+    /// - `timestamp`: The current timestamp.
+    /// - `feedforward`: An optional feedforward term to be added to the output.
+    /// - `mods`: Per-call modifiers for gain scaling and directional anti-windup.
+    ///
+    /// # Returns
+    /// - A tuple containing the computed output and the updated PID context.
+    pub fn compute_with_modifiers<T: InstantLike>(
+        &self,
         mut ctx: PidContext<T, F>,
         input: F,
         setpoint: F,
         timestamp: T,
         feedforward: Option<F>,
+        mods: &PidModifiers<F>,
     ) -> (F, PidContext<T, F>) {
         if !ctx.is_active {
             return (ctx.output, ctx);
@@ -1142,12 +1298,13 @@ impl<F: FloatCore> FuncPidController<F> {
             self.filter.apply_stateless(raw_deriv, &ctx.filter_ctx);
         ctx.filter_ctx = new_filter_ctx;
 
-        (ctx.output, ctx.i_term, ctx.prev_derivative) = ctx.eval_pid(
+        (ctx.output, ctx.i_term, ctx.prev_derivative, ctx.terms) = ctx.eval_pid(
             &self.config,
             error,
             filtered_deriv,
             ff,
             ctx.integrator_activity,
+            mods,
         );
         ctx.prev_input = input;
         ctx.prev_err = error;
