@@ -43,8 +43,11 @@
 //! // The PID controller is automatically initialized at the first call
 //! let mut pid = pid::PidController::new_uninit(pid::PidConfig::default());
 //!
-//! // Freely change the PID configuration
-//! assert!(pid.config_mut().set_kp(2.0).is_ok());
+//! // Freely change the PID configuration: edit a copy, then write it back. Writing it back is
+//! // what lets the controller re-derive the low-pass filter on the D-term.
+//! let mut config = *pid.config();
+//! assert!(config.set_kp(2.0).is_ok());
+//! pid.set_config(config);
 //!
 //! let pos_feedback = 1.0;
 //! let pos_setpoint = 0.0;

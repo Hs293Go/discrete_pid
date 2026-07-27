@@ -37,11 +37,13 @@ mod test_pid_numerical_performance {
     use nalgebra as na;
 
     fn configure_pid_nondefault(pid: &mut FuncPidController<f64>) {
-        assert!(pid.config_mut().set_kp(10.0).is_ok());
-        assert!(pid.config_mut().set_ki(20.0).is_ok());
-        assert!(pid.config_mut().set_kd(1.0).is_ok());
-        assert!(pid.config_mut().set_filter_tc(0.02).is_ok());
-        pid.config_mut().set_use_strict_causal_integrator(true);
+        let mut config = *pid.config();
+        assert!(config.set_kp(10.0).is_ok());
+        assert!(config.set_ki(20.0).is_ok());
+        assert!(config.set_kd(1.0).is_ok());
+        assert!(config.set_filter_tc(0.02).is_ok());
+        config.set_use_strict_causal_integrator(true);
+        pid.set_config(config);
     }
 
     /// To recreate these test results, create the following simulink model
@@ -152,10 +154,10 @@ mod test_pid_numerical_performance {
         let mut stateful_pid = make_stateful_controller();
 
         // Set non-default D-gain and filter time constant
-        assert!(func_pid.config_mut().set_kd(0.01).is_ok());
-        assert!(func_pid.config_mut().set_filter_tc(0.02).is_ok());
-        assert!(stateful_pid.config_mut().set_kd(0.01).is_ok());
-        assert!(stateful_pid.config_mut().set_filter_tc(0.02).is_ok());
+        assert!(tune(&mut func_pid, |c| c.set_kd(0.01)).is_ok());
+        assert!(tune(&mut func_pid, |c| c.set_filter_tc(0.02)).is_ok());
+        assert!(tune_stateful(&mut stateful_pid, |c| c.set_kd(0.01)).is_ok());
+        assert!(tune_stateful(&mut stateful_pid, |c| c.set_filter_tc(0.02)).is_ok());
 
         let mut expected: f64;
 
@@ -181,10 +183,10 @@ mod test_pid_numerical_performance {
         let mut stateful_pid = make_stateful_controller();
 
         // Set non-default D-gain and filter time constant
-        assert!(func_pid.config_mut().set_kd(0.01).is_ok());
-        assert!(func_pid.config_mut().set_filter_tc(0.02).is_ok());
-        assert!(stateful_pid.config_mut().set_kd(0.01).is_ok());
-        assert!(stateful_pid.config_mut().set_filter_tc(0.02).is_ok());
+        assert!(tune(&mut func_pid, |c| c.set_kd(0.01)).is_ok());
+        assert!(tune(&mut func_pid, |c| c.set_filter_tc(0.02)).is_ok());
+        assert!(tune_stateful(&mut stateful_pid, |c| c.set_kd(0.01)).is_ok());
+        assert!(tune_stateful(&mut stateful_pid, |c| c.set_filter_tc(0.02)).is_ok());
 
         let mut state = na::vector![0.0, 0.0];
         let mut expected: f64;

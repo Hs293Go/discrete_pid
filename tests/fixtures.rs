@@ -35,4 +35,28 @@ pub mod test_pid {
         let config = PidConfig::default();
         PidController::new_uninit(config)
     }
+
+    /// Applies `f` to a copy of the controller's configuration, then writes it back through
+    /// `set_config` so the D-term filter is re-derived. Returns whatever `f` returned, so a
+    /// fallible setter can still be asserted on at the call site.
+    pub fn tune<R>(
+        pid: &mut FuncPidController<f64>,
+        f: impl FnOnce(&mut PidConfig<f64>) -> R,
+    ) -> R {
+        let mut config = *pid.config();
+        let result = f(&mut config);
+        pid.set_config(config);
+        result
+    }
+
+    /// [`tune`], for the stateful controller.
+    pub fn tune_stateful<R>(
+        pid: &mut PidController<Millis, f64>,
+        f: impl FnOnce(&mut PidConfig<f64>) -> R,
+    ) -> R {
+        let mut config = *pid.config();
+        let result = f(&mut config);
+        pid.set_config(config);
+        result
+    }
 }

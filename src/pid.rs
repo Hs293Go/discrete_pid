@@ -21,7 +21,7 @@
 
 use crate::time::InstantLike;
 use air_filters::iir::pt1::{Pt1Filter, Pt1FilterContext};
-use air_filters::{CommonFilterConfig, Filter, FuncFilter};
+use air_filters::{CommonConfigurableFilter, CommonFilterConfig, Filter, FuncFilter};
 use num_traits::FloatConst;
 
 use core::time::Duration;
@@ -82,9 +82,13 @@ pub enum PidConfigError {
 /// Modify the configuration using the provided setter methods in-place, or use
 /// [`PidConfigBuilder`] to create a fully-specified configuration.
 ///
-/// Tune the PID controller on-the-fly by accessing its configuration through
-/// [`FuncPidController::config_mut`] or [`PidController::config_mut`], then calling the desired
-/// setters.
+/// Tune the PID controller on-the-fly by reading, modifying, and setting the configuration through:
+/// - [`FuncPidController::config`] / [`PidController::config`]
+/// - [`FuncPidController::set_config`] / [`PidController::set_config`].
+///
+/// The setters update configuration-dependent components (e.g. the derivative filter) properly,
+/// unlike methods that return a mutable reference to the configuration, which are deprecated and
+/// only retained for backwards compatibility.
 ///
 /// # Details
 ///
@@ -177,6 +181,24 @@ fn check_output_limits<F: FloatCore>(output_min: F, output_max: F) -> Result<(),
         return Err(PidConfigError::InvalidOutputLimits);
     }
     Ok(())
+}
+
+/// Cutoff frequency, in Hz, of the D-term low-pass filter implied by the configured time constant.
+fn filter_cutoff_hz<F: FloatCore + FloatConst>(config: &PidConfig<F>) -> F {
+    F::one() / (F::TAU() * config.filter_tc)
+}
+
+/// Sample frequency, in Hz, of the D-term low-pass filter implied by the configured sample time.
+fn filter_sample_hz<F: FloatCore>(config: &PidConfig<F>) -> F {
+    F::one() / F::from(config.sample_time.as_secs_f64()).unwrap()
+}
+
+/// Re-derives the D-term filter's coefficient from `config`, preserving filter state so retuning
+/// stays bumpless. The [`PidConfig`] invariants make the setters infallible; an errored setter
+/// leaves the previous coefficient in place rather than panicking.
+fn sync_filter<F: FloatCore + FloatConst>(filter: &mut Pt1Filter<F>, config: &PidConfig<F>) {
+    let _ = filter.set_cutoff_frequency_hz(filter_cutoff_hz(config));
+    let _ = filter.set_sample_frequency_hz(filter_sample_hz(config));
 }
 
 impl<F: FloatCore> Default for PidConfig<F> {
@@ -768,9 +790,8 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
     /// variables
     pub fn new_uninit(config: PidConfig<F>) -> Self {
         let mut cfg = CommonFilterConfig::new();
-        let _ = cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()));
-        let _ = cfg
-            .set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap());
+        let _ = cfg.set_cutoff_frequency_hz(filter_cutoff_hz(&config));
+        let _ = cfg.set_sample_frequency_hz(filter_sample_hz(&config));
         Self {
             i_term: F::zero(),
             prev_err: F::zero(),
@@ -791,9 +812,11 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
     pub fn new(config: PidConfig<F>, timestamp: T, input: F, output: F) -> Self {
         let mut cfg = CommonFilterConfig::new();
 
-        cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()))
-            .expect("Invalid filter time constant; This should have been caught by PidConfig validation");
-        cfg.set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap())
+        cfg.set_cutoff_frequency_hz(filter_cutoff_hz(&config))
+            .expect(
+            "Invalid filter time constant; This should have been caught by PidConfig validation",
+        );
+        cfg.set_sample_frequency_hz(filter_sample_hz(&config))
             .expect("Invalid sample time; This should have been caught by PidConfig validation");
         Self {
             i_term: output.clamp(config.output_min, config.output_max),
@@ -815,8 +838,42 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
         &self.config
     }
 
-    /// Returns a mutable reference to the PID configuration. This allows you to modify the
-    /// configuration and tune the PID controller on-the-fly
+    /// Installs a new PID configuration, re-deriving the D-term low-pass filter from it. This is
+    /// infallible because the [`PidConfig`] invariants enforce configuration validity.
+    ///
+    /// # Arguments
+    /// - `config`: The new PID configuration.
+    ///
+    /// # Example
+    /// ```rust
+    /// use discrete_pid::pid::{PidConfig, PidController};
+    /// use discrete_pid::time::Millis;
+    ///
+    /// let mut pid = PidController::<Millis, f64>::new_uninit(PidConfig::default());
+    ///
+    /// let mut config = *pid.config();
+    /// assert!(config.set_kp(2.0).is_ok());
+    /// assert!(config.set_filter_tc(0.02).is_ok());
+    /// pid.set_config(config);
+    /// ```
+    pub fn set_config(&mut self, config: PidConfig<F>) {
+        self.config = config;
+        sync_filter(&mut self.filter, &self.config);
+    }
+
+    /// Returns a mutable reference to the PID configuration.
+    ///
+    /// # Deprecated
+    ///
+    /// The D-term filter lives in the controller, not in [`PidConfig`], and is derived from
+    /// [`filter_tc`](PidConfig::set_filter_tc) and [`sample_time`](PidConfig::set_sample_time).
+    /// Mutating through this reference cannot notify the controller, so changes to those two
+    /// parameters leave the D-term running at its old bandwidth. Use
+    /// [`set_config`](Self::set_config), which re-derives the filter.
+    #[deprecated(
+        since = "0.3.0",
+        note = "cannot re-derive the D-term filter: changes to filter_tc or sample_time are silently ignored. Use set_config instead"
+    )]
     pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.config
     }
@@ -1180,13 +1237,34 @@ impl<F: FloatCore + FloatConst> FuncPidController<F> {
     /// - `config`: The PID configuration.
     pub fn new(config: PidConfig<F>) -> Self {
         let mut cfg = CommonFilterConfig::new();
-        let _ = cfg.set_cutoff_frequency_hz(F::one() / (F::TAU() * config.filter_tc()));
-        let _ = cfg
-            .set_sample_frequency_hz(F::one() / F::from(config.sample_time.as_secs_f64()).unwrap());
+        let _ = cfg.set_cutoff_frequency_hz(filter_cutoff_hz(&config));
+        let _ = cfg.set_sample_frequency_hz(filter_sample_hz(&config));
         FuncPidController {
             filter: Pt1Filter::new(cfg),
             config,
         }
+    }
+
+    /// Installs a new PID configuration, re-deriving the D-term low-pass filter from it. This is
+    /// infallible because the [`PidConfig`] invariants enforce configuration validity.
+    ///
+    /// # Arguments
+    /// - `config`: The new PID configuration.
+    ///
+    /// # Example
+    /// ```rust
+    /// use discrete_pid::pid::{FuncPidController, PidConfig};
+    ///
+    /// let mut pid = FuncPidController::new(PidConfig::<f64>::default());
+    ///
+    /// let mut config = *pid.config();
+    /// assert!(config.set_kp(2.0).is_ok());
+    /// assert!(config.set_filter_tc(0.02).is_ok());
+    /// pid.set_config(config);
+    /// ```
+    pub fn set_config(&mut self, config: PidConfig<F>) {
+        self.config = config;
+        sync_filter(&mut self.filter, &self.config);
     }
 }
 
@@ -1196,8 +1274,21 @@ impl<F: FloatCore> FuncPidController<F> {
         &self.config
     }
 
-    /// Returns a mutable reference to the PID configuration. This allows you to modify the
-    /// configuration and tune the PID controller on-the-fly
+    /// Returns a mutable reference to the PID configuration.
+    ///
+    /// # Deprecated
+    ///
+    /// Since version 0.2.0, we use a separate filter struct from
+    /// [`air-filters`](https://crates.io/crates/air-filters) to implement the D-term low-pass
+    /// filter. The filter's configuration is stored separately from [`PidConfig`], so calling
+    /// [`filter_tc`](PidConfig::set_filter_tc) and [`sample_time`](PidConfig::set_sample_time) on
+    /// the returned reference will not update the filter's configuration, leaving the D-term
+    /// running at its old bandwidth. Use [`set_config`](Self::set_config), which re-derives the
+    /// filter.
+    #[deprecated(
+        since = "0.3.0",
+        note = "cannot re-derive the D-term filter: changes to filter_tc or sample_time are silently ignored. Use set_config instead"
+    )]
     pub fn config_mut(&mut self) -> &mut PidConfig<F> {
         &mut self.config
     }

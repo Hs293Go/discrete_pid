@@ -30,7 +30,6 @@ mod test_pid_config {
 
     use core::f64;
 
-    use super::test_pid::make_controller;
     use super::*;
 
     const NEW_KP: f64 = 10.0;
@@ -39,8 +38,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_kp() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default kp is 1
         assert_eq!(config.kp(), 1.0);
@@ -84,8 +82,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_ki() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default ki is 1
         assert_eq!(config.ki(), 1.0);
@@ -140,8 +137,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_kd() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default kd is 0
         assert_eq!(config.kd(), 0.0);
@@ -199,8 +195,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_filter_tc() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default filter time constant is 0
         assert_eq!(config.filter_tc(), 0.01);
@@ -249,8 +244,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_sample_time() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default sample time is 10ms
         assert_eq!(config.sample_time(), Duration::from_millis(10));
@@ -311,8 +305,7 @@ mod test_pid_config {
     ];
     #[test]
     fn test_get_and_set_output_limits() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default output limits are -1.0 and 1.0
         assert_eq!(config.output_min(), -f64::INFINITY);
@@ -371,8 +364,7 @@ mod test_pid_config {
 
     #[test]
     fn test_get_and_set_flags() {
-        let (mut pid, _) = make_controller();
-        let config = pid.config_mut();
+        let mut config = PidConfig::<f64>::default();
 
         // Default flags are all false
         assert!(!config.use_derivative_on_measurement());
@@ -412,7 +404,7 @@ mod test_pid_config {
 mod test_pid_qualitative_performance {
     use discrete_pid::pid::{FuncPidController, PidContext};
 
-    use super::test_pid::make_controller;
+    use super::test_pid::{make_controller, tune};
     use super::*;
 
     pub fn get_next_timestamp(
@@ -429,9 +421,10 @@ mod test_pid_qualitative_performance {
         #[test]
         fn test_pure_proportional_control() {
             let (mut pid, ctx) = make_controller();
-            let config = pid.config_mut();
-            assert!(config.set_ki(0.0).is_ok());
-            assert!(config.set_kd(0.0).is_ok());
+            tune(&mut pid, |config| {
+                assert!(config.set_ki(0.0).is_ok());
+                assert!(config.set_kd(0.0).is_ok());
+            });
 
             let (_, ctx) = pid.compute(ctx, 0.5, 1.0, get_next_timestamp(&pid, &ctx), None);
             let output = ctx.output();
@@ -469,7 +462,7 @@ mod test_pid_qualitative_performance {
             let limit: f64 =
                 BASE_ERROR * (1.0 + N_STEPS as f64 * pid.config().sample_time().as_secs_f64());
 
-            assert!(pid.config_mut().set_output_limits(-limit, limit).is_ok());
+            assert!(tune(&mut pid, |c| c.set_output_limits(-limit, limit)).is_ok());
 
             for i in 0..10 {
                 // Setpoint is constant, but input (process value) is held unchanged, so integral
@@ -498,7 +491,7 @@ mod test_pid_qualitative_performance {
             let limit: f64 =
                 BASE_ERROR * (1.0 + N_STEPS as f64 * pid.config().sample_time().as_secs_f64());
 
-            assert!(pid.config_mut().set_output_limits(-limit, limit).is_ok());
+            assert!(tune(&mut pid, |c| c.set_output_limits(-limit, limit)).is_ok());
 
             const N_CYCLES: usize = 2;
             for i in 0..(N_CYCLES * N_STEPS - 1) {
@@ -554,22 +547,22 @@ mod test_pid_qualitative_performance {
         fn test_derivative_boosting_and_damping() {
             let (mut pid, mut ctx) = make_controller();
 
-            assert!(pid.config_mut().set_kd(1.0).is_ok());
+            assert!(tune(&mut pid, |c| c.set_kd(1.0)).is_ok());
 
             // An initial step to start storing error/input
             (_, ctx) = pid.compute(ctx, 0.0, 5.0, get_next_timestamp(&pid, &ctx), None);
 
             const NEW_SETPOINT: f64 = 10.0;
 
-            pid.config_mut().set_use_derivative_on_measurement(false);
+            tune(&mut pid, |c| c.set_use_derivative_on_measurement(false));
             let (output_no_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
-            pid.config_mut().set_use_derivative_on_measurement(true);
+            tune(&mut pid, |c| c.set_use_derivative_on_measurement(true));
             let (output_with_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
-            assert!(pid.config_mut().set_kd(0.0).is_ok());
+            assert!(tune(&mut pid, |c| c.set_kd(0.0)).is_ok());
             let (output_no_derivative, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
@@ -584,18 +577,18 @@ mod test_pid_qualitative_performance {
         fn test_derivative_kick_mitigation() {
             let (mut pid, mut ctx) = make_controller();
 
-            assert!(pid.config_mut().set_kd(1.0).is_ok());
+            assert!(tune(&mut pid, |c| c.set_kd(1.0)).is_ok());
 
             // An initial step to start storing error/input
             (_, ctx) = pid.compute(ctx, 0.0, 5.0, get_next_timestamp(&pid, &ctx), None);
 
             const NEW_SETPOINT: f64 = 50.0;
 
-            pid.config_mut().set_use_derivative_on_measurement(false);
+            tune(&mut pid, |c| c.set_use_derivative_on_measurement(false));
             let (output_no_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
-            pid.config_mut().set_use_derivative_on_measurement(true);
+            tune(&mut pid, |c| c.set_use_derivative_on_measurement(true));
             let (output_with_derivative_on_meas, _) =
                 pid.compute(ctx, 1.0, NEW_SETPOINT, get_next_timestamp(&pid, &ctx), None);
 
@@ -881,18 +874,18 @@ mod test_stateful_pid {
     fn test_derivative_kick_mitigation() {
         let mut pid = make_stateful_controller();
 
-        assert!(pid.config_mut().set_kd(1.0).is_ok());
+        assert!(tune_stateful(&mut pid, |c| c.set_kd(1.0)).is_ok());
 
         // An initial step to start storing error/input
         pid.compute(0.0, 5.0, get_next_timestamp_stateful(&pid), None);
 
         const NEW_SETPOINT: f64 = 50.0;
 
-        pid.config_mut().set_use_derivative_on_measurement(false);
+        tune_stateful(&mut pid, |c| c.set_use_derivative_on_measurement(false));
         let output_no_derivative_on_meas =
             pid.compute(1.0, NEW_SETPOINT, get_next_timestamp_stateful(&pid), None);
 
-        pid.config_mut().set_use_derivative_on_measurement(true);
+        tune_stateful(&mut pid, |c| c.set_use_derivative_on_measurement(true));
         let output_with_derivative_on_meas =
             pid.compute(1.0, NEW_SETPOINT, get_next_timestamp_stateful(&pid), None);
 
@@ -921,5 +914,79 @@ mod test_stateful_pid {
         let expected_i_term =
             STEADY_STATE_DISTURBANCE + EXPECTED_ERROR * pid.config().sample_time().as_secs_f64();
         assert_eq!(output, EXPECTED_ERROR + expected_i_term);
+    }
+}
+
+/// The D-term low-pass filter is derived from `filter_tc` and `sample_time` but lives in the
+/// controller, not in `PidConfig`. These tests pin the two ways that can go.
+mod test_config_propagation {
+    use super::*;
+    use discrete_pid::pid::{FuncPidController, PidContext};
+
+    const RETUNED_TC: f64 = 0.02;
+    const KD: f64 = 1.0;
+
+    /// D-terms of a ramp response, from a cold start. A ramp keeps the raw derivative constant and
+    /// nonzero, so the filter's transient — the only thing `filter_tc` changes — shows up here.
+    fn d_terms(pid: &FuncPidController<f64>) -> Vec<f64> {
+        let mut ctx = PidContext::<Millis, f64>::new_uninit();
+        let sample_time = pid.config().sample_time();
+        let mut terms = vec![];
+        for i in 1..=5 {
+            (_, ctx) = pid.compute(ctx, 0.0, i as f64, Millis(0) + sample_time * i, None);
+            terms.push(ctx.terms().d);
+        }
+        assert!(terms.iter().any(|d| *d != 0.0), "d-terms are all zero");
+        terms
+    }
+
+    fn retuned_config(f: impl FnOnce(&mut PidConfig<f64>)) -> PidConfig<f64> {
+        let mut config = PidConfig::<f64>::default();
+        assert!(config.set_kd(KD).is_ok());
+        f(&mut config);
+        config
+    }
+
+    /// `set_config` must re-derive the filter: retuning after construction has to match having
+    /// built the controller with that configuration in the first place.
+    #[test]
+    fn test_set_config_propagates_filter_tc() {
+        let config = retuned_config(|c| assert!(c.set_filter_tc(RETUNED_TC).is_ok()));
+
+        let mut retuned = FuncPidController::new(PidConfig::default());
+        retuned.set_config(config);
+
+        assert_eq!(d_terms(&retuned), d_terms(&FuncPidController::new(config)));
+    }
+
+    /// Same, for the sample time, which the filter also depends on.
+    #[test]
+    fn test_set_config_propagates_sample_time() {
+        let config = retuned_config(|c| {
+            assert!(c.set_sample_time(Duration::from_millis(50)).is_ok());
+        });
+
+        let mut retuned = FuncPidController::new(PidConfig::default());
+        retuned.set_config(config);
+
+        assert_eq!(d_terms(&retuned), d_terms(&FuncPidController::new(config)));
+    }
+
+    /// The deprecated `config_mut` cannot notify the controller, so the filter keeps its old
+    /// bandwidth. Pinned here so the hazard the deprecation warns about stays true.
+    #[test]
+    #[allow(deprecated)]
+    fn test_config_mut_leaves_filter_stale() {
+        let config = retuned_config(|c| assert!(c.set_filter_tc(RETUNED_TC).is_ok()));
+
+        let mut stale = FuncPidController::new(PidConfig::default());
+        *stale.config_mut() = config;
+
+        assert_ne!(d_terms(&stale), d_terms(&FuncPidController::new(config)));
+
+        // The D-term still runs at the tc the controller was constructed with.
+        let mut as_constructed = FuncPidController::new(PidConfig::default());
+        as_constructed.set_config(retuned_config(|_| {}));
+        assert_eq!(d_terms(&stale), d_terms(&as_constructed));
     }
 }
