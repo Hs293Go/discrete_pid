@@ -679,7 +679,7 @@ trait PidAlgorithm<F: FloatCore> {
         feedforward: F,
         integrator_activity: IntegratorActivity,
         mods: &PidModifiers<F>,
-    ) -> (F, F, F, PidTerms<F>) {
+    ) -> (F, F, PidTerms<F>) {
         let mut i_term = self.i_term();
         if !config.use_strict_causal_integrator {
             i_term = self.compute_i_term(config, error, integrator_activity, mods);
@@ -700,7 +700,7 @@ trait PidAlgorithm<F: FloatCore> {
             d,
             ff: feedforward,
         };
-        (output, i_term, filtered_derivative, terms)
+        (output, i_term, terms)
     }
 
     #[must_use]
@@ -750,7 +750,6 @@ pub struct PidController<T: InstantLike, F: FloatCore> {
     i_term: F,
     prev_err: F,
     prev_input: F,
-    prev_derivative: F,
     terms: PidTerms<F>,
 
     /// For managing PID runtime behavior
@@ -776,7 +775,6 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
             i_term: F::zero(),
             prev_err: F::zero(),
             prev_input: F::zero(),
-            prev_derivative: F::zero(),
             terms: PidTerms::default(),
             output: F::zero(),
             last_time: None,
@@ -801,7 +799,6 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
             i_term: output.clamp(config.output_min, config.output_max),
             prev_err: F::zero(),
             prev_input: input,
-            prev_derivative: F::zero(),
             terms: PidTerms::default(),
             output: output.clamp(config.output_min, config.output_max),
             last_time: Some(timestamp),
@@ -900,7 +897,7 @@ impl<T: InstantLike, F: FloatCore + FloatConst> PidController<T, F> {
         // Copy the Copy fields out before the &mut self borrow from eval_pid
         let config = self.config;
         let integrator_activity = self.integrator_activity;
-        (self.output, self.i_term, self.prev_derivative, self.terms) = self.eval_pid(
+        (self.output, self.i_term, self.terms) = self.eval_pid(
             &config,
             error,
             filtered_deriv,
@@ -1006,7 +1003,6 @@ pub struct PidContext<T: InstantLike, F: FloatCore> {
     i_term: F,
     prev_err: F,
     prev_input: F,
-    prev_derivative: F,
     terms: PidTerms<F>,
 
     /// State of the PT1 low-pass filter applied to the D-term. Stored as a `Pt1FilterContext` so
@@ -1050,7 +1046,6 @@ impl<T: InstantLike, F: FloatCore> PidContext<T, F> {
             i_term: output,
             prev_err: F::zero(),
             prev_input: input,
-            prev_derivative: F::zero(),
             terms: PidTerms::default(),
             filter_ctx: Pt1FilterContext::default(),
             output,
@@ -1130,7 +1125,6 @@ impl<T: InstantLike, F: FloatCore> Default for PidContext<T, F> {
             i_term: F::zero(),
             prev_err: F::zero(),
             prev_input: F::zero(),
-            prev_derivative: F::zero(),
             terms: PidTerms::default(),
             filter_ctx: Pt1FilterContext::default(),
             output: F::zero(),
@@ -1298,7 +1292,7 @@ impl<F: FloatCore> FuncPidController<F> {
             self.filter.apply_stateless(raw_deriv, &ctx.filter_ctx);
         ctx.filter_ctx = new_filter_ctx;
 
-        (ctx.output, ctx.i_term, ctx.prev_derivative, ctx.terms) = ctx.eval_pid(
+        (ctx.output, ctx.i_term, ctx.terms) = ctx.eval_pid(
             &self.config,
             error,
             filtered_deriv,
