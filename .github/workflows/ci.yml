@@ -17,6 +17,10 @@ jobs:
             features: ""
           - name: No-std
             features: "--no-default-features --lib --bins --tests --examples"
+          # The Simulink compliance suite in tests/sim.rs is gated on `simulation`, so without
+          # this leg it only ever runs in the coverage job.
+          - name: All features
+            features: "--all-features"
 
     steps:
       - uses: actions/checkout@v4
